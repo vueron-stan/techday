@@ -12,6 +12,8 @@ import * as THREE from 'three/webgpu';
 import { GLTFLoader, HDRLoader } from 'three/examples/jsm/Addons.js';
 import {
   GpuFrustumRayHitPass,
+  LAYER_DEPTH_OCCLUDER,
+  LAYER_DEPTH_SIM_INVISIBLE,
   LAYER_FRUSTUM_GUIDE,
 } from './GpuFrustumRayHitPass';
 import {
@@ -250,8 +252,6 @@ interface FrustumVisualizerProps {
   projectMarkersOnNearPlaneOnly: boolean;
   /** 시안: 구면만 / GPU 깊이(차·바닥) 시뮬 */
   cyanHitMode: CyanHitMode;
-  /** 바닥(street) 투명도 — 0이면 깊이/레이 통과 */
-  streetOpacity: number;
   /** GPU 깊이 히트 위치 노이즈 (world 단위, 0–0.3) */
   hitNoiseLevel: number;
   /** 라이다 원점 표시: 전방 −Z로 선 사각 피라미드 높이(꼭짓점~밑면) */
@@ -287,7 +287,6 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   carRaycastTarget,
   projectMarkersOnNearPlaneOnly,
   cyanHitMode,
-  streetOpacity,
   hitNoiseLevel,
   lidarPyramidHeight,
   lidarSampleRateHz,
@@ -334,8 +333,8 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     [lidarPyramidGeometry],
   );
 
-  const depthSceneActive =
-    streetOpacity > 0 || carRaycastTarget != null;
+  /** 차·바닥 opacity 0 이라도 전용 레이어로 깊이 패스에 남음 */
+  const depthSceneActive = true;
   const cyanDepthSim = cyanHitMode === 'depthSim';
   const runGpuHits =
     depthSceneActive &&
@@ -855,29 +854,42 @@ function PanelGroup({
 
 const PRESET_DURATION_MS = 1800;
 
-/** GLB 루트: opacity 0 이면 완전 숨김(레이·깊이 통과), 아니면 표면·깊이 버퍼에 기여 */
+/**
+ * GLB 루트: opacity>0 이면 레이어 0에서 일반 렌더.
+ * opacity≤0 이면 메인 뷰에서는 보이지 않지만 `LAYER_DEPTH_SIM_INVISIBLE` 로 LiDAR 깊이 패스에만 기여(포인트 시뮬 유지).
+ */
 function applyGltfRootSurfaceState(
   root: THREE.Object3D,
   opacity: number,
   depthWrite: boolean,
 ) {
-  if (opacity <= 0) {
-    root.visible = false;
-    return;
-  }
-
   root.visible = true;
   root.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
+    if (opacity <= 0) {
+      child.layers.set(LAYER_DEPTH_SIM_INVISIBLE);
+    } else {
+      child.layers.set(LAYER_DEPTH_OCCLUDER);
+    }
     const mats = Array.isArray(child.material) ? child.material : [child.material];
     for (const mat of mats) {
       if (!mat) continue;
-      const m = mat as THREE.Material;
-      m.transparent = opacity < 1;
-      m.opacity = opacity;
-      m.depthWrite = depthWrite;
-      m.depthTest = true;
-      m.needsUpdate = true;
+      const m = mat as THREE.Material & { colorWrite?: boolean };
+      if (opacity <= 0) {
+        m.transparent = false;
+        m.opacity = 1;
+        m.depthWrite = depthWrite;
+        m.depthTest = true;
+        m.colorWrite = false;
+        m.needsUpdate = true;
+      } else {
+        m.transparent = opacity < 1;
+        m.opacity = opacity;
+        m.depthWrite = depthWrite;
+        m.depthTest = true;
+        m.colorWrite = true;
+        m.needsUpdate = true;
+      }
     }
   });
 }
@@ -919,6 +931,13 @@ function Car({
   );
 }
 
+const STREET_SEGMENT_OFFSETS: readonly (readonly [number, number, number])[] = [
+  [0, -2, 0],
+  [0, -2, -30],
+  [0, -2, -60],
+  [0, -2, -90],
+];
+
 function Street({
   opacity,
   depthWrite,
@@ -927,39 +946,32 @@ function Street({
   depthWrite: boolean;
 }) {
   const gltf = useLoader(GLTFLoader, '/street.glb');
+  const segmentRoots = useMemo(() => {
+    const roots: THREE.Object3D[] = [gltf.scene];
+    for (let i = 0; i < STREET_SEGMENT_OFFSETS.length - 1; i++) {
+      roots.push(gltf.scene.clone(true));
+    }
+    return roots;
+  }, [gltf]);
 
   useLayoutEffect(() => {
-    applyGltfRootSurfaceState(gltf.scene, opacity, depthWrite);
-  }, [gltf, opacity, depthWrite]);
+    for (const root of segmentRoots) {
+      applyGltfRootSurfaceState(root, opacity, depthWrite);
+    }
+  }, [segmentRoots, opacity, depthWrite]);
 
   return (
     <group>
-      <primitive
-        object={gltf.scene}
-        scale={[0.02, 0.02, 0.02]}
-        position={[0, -2, 0]}
-        rotation={[0, 0, 0]}
-      />
-      <primitive
-        object={gltf.scene.clone(true)}
-        scale={[0.02, 0.02, 0.02]}
-        position={[0, -2, -30]}
-        rotation={[0, 0, 0]}
-      />
-      <primitive
-        object={gltf.scene.clone(true)}
-        scale={[0.02, 0.02, 0.02]}
-        position={[0, -2, -60]}
-        rotation={[0, 0, 0]}
-      />
-      <primitive
-        object={gltf.scene.clone(true)}
-        scale={[0.02, 0.02, 0.02]}
-        position={[0, -2, -90]}
-        rotation={[0, 0, 0]}
-      />
+      {segmentRoots.map((root, i) => (
+        <primitive
+          key={i}
+          object={root}
+          scale={[0.02, 0.02, 0.02]}
+          position={STREET_SEGMENT_OFFSETS[i] as [number, number, number]}
+          rotation={[0, 0, 0]}
+        />
+      ))}
     </group>
-
   );
 }
 
@@ -1196,10 +1208,9 @@ export default function App() {
           sphereHitSize={sphereHitSize}
           sphereHitOpacity={sphereHitOpacity}
           nearPointSize={nearPointSize}
-          carRaycastTarget={carOpacity > 0 ? carRaycastTarget : null}
+          carRaycastTarget={carRaycastTarget}
           projectMarkersOnNearPlaneOnly={projectMarkersOnNearPlaneOnly}
           cyanHitMode={cyanHitMode}
-          streetOpacity={streetOpacity}
           hitNoiseLevel={hitNoiseLevel}
           lidarPyramidHeight={lidarPyramidHeight}
           lidarSampleRateHz={lidarSampleRateHz}

@@ -24,6 +24,10 @@ const DEG2RAD = Math.PI / 180;
 export const LAYER_DEPTH_OCCLUDER = 0;
 /** 프러스텀 가이드(구·선·평면·원점) — 깊이 패스에서 제외 */
 export const LAYER_FRUSTUM_GUIDE = 1;
+/**
+ * opacity 0 인 차·바닥: 메인 카메라(0·1)에는 안 보이지만 LiDAR 깊이 카메라는 이 레이어로 메시를 그려 포인트 시뮬 유지
+ */
+export const LAYER_DEPTH_SIM_INVISIBLE = 2;
 
 interface Partition {
   start: number;
@@ -185,6 +189,7 @@ export class GpuFrustumRayHitPass {
       );
       camera.layers.disableAll();
       camera.layers.enable(LAYER_DEPTH_OCCLUDER);
+      camera.layers.enable(LAYER_DEPTH_SIM_INVISIBLE);
 
       /** Ry(θ)·(0,0,−1)=(−sin θ,0,−cos θ) 이므로 (sin θ,0,−cos θ) 정렬에 Y축 −θ */
       const localRotation = new THREE.Quaternion().setFromAxisAngle(

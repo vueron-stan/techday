@@ -51,9 +51,9 @@ export interface SceneSnapshot {
   lidarMaxRange: number;
 
   /* ─── 차량 · 바닥 ─── */
-  /** 0이면 차량 숨김 — 레이캐스트 타깃도 끔 */
+  /** 0이면 차량을 화면에만 숨김 — LiDAR 깊이·레이캐스트 타깃은 유지 */
   carOpacity: number;
-  /** 0이면 바닥(street) 깊이·레이 비기여 — `FrustumVisualizer`의 `streetOpacity`와 동일 */
+  /** 0이면 바닥을 화면에만 숨김 — LiDAR 깊이 패스에는 여전히 메시가 있어 포인트 시뮬 유지 */
   streetOpacity: number;
 
   /* ─── 카메라 · 환경 ─── */
@@ -138,12 +138,13 @@ export const PRESETS: SceneSnapshot[] = [
     planeOpacity: 0.02,
     sphereHitOpacity: 0.45,
     nearPointSize: 0,
+    lineOpacity:0,
     near: 6,
-    cameraPosition: [5.5, 3.8, 7.5],
-    orbitTarget: [0, 0, 0],
-    backgroundIntensity: 1.05,
-    carOpacity: 0.1,
-    streetOpacity: 1,
+    cameraPosition: [15.5, 3.8, 3],
+    orbitTarget: [0, 0, -5],
+    backgroundIntensity: 0.2,
+    carOpacity: 0.02,
+    streetOpacity: 0.02,
     projectMarkersOnNearPlaneOnly: false,
     cyanHitMode: 'depthSim',
     carDrive: {
