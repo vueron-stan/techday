@@ -286,6 +286,8 @@ export class GpuFrustumRayHitPass {
     this.cyanMaterial = new THREE.MeshBasicNodeMaterial();
     this.cyanMaterial.transparent = true;
     this.cyanMaterial.depthWrite = false;
+    /** 차량·지면 이후에 그려도 깊이 버퍼에 밀리지 않게 (표면 z-fight 방지) */
+    this.cyanMaterial.depthTest = false;
     const cyanVis = this.visibilityStorage.element(instanceIndex) as any;
     const cyanDir = this.directionStorage.element(instanceIndex) as any;
     const cyanHit = this.positionStorage.element(instanceIndex) as any;
@@ -300,6 +302,7 @@ export class GpuFrustumRayHitPass {
     this.yellowMaterial = new THREE.MeshBasicNodeMaterial();
     this.yellowMaterial.transparent = true;
     this.yellowMaterial.depthWrite = false;
+    this.yellowMaterial.depthTest = false;
     const yVis = this.visibilityStorage.element(instanceIndex) as any;
     const yHit = this.positionStorage.element(instanceIndex) as any;
     this.yellowMaterial.colorNode = vec3(1, 1, 0);
@@ -314,7 +317,7 @@ export class GpuFrustumRayHitPass {
       numPoints,
     );
     this.cyanMesh.frustumCulled = false;
-    this.cyanMesh.renderOrder = 1000;
+    this.cyanMesh.renderOrder = 2500;
     this.cyanMesh.layers.set(LAYER_FRUSTUM_GUIDE);
 
     this.yellowMesh = new THREE.InstancedMesh(
@@ -323,7 +326,7 @@ export class GpuFrustumRayHitPass {
       numPoints,
     );
     this.yellowMesh.frustumCulled = false;
-    this.yellowMesh.renderOrder = 1001;
+    this.yellowMesh.renderOrder = 2501;
     this.yellowMesh.layers.set(LAYER_FRUSTUM_GUIDE);
   }
 
@@ -342,7 +345,7 @@ export class GpuFrustumRayHitPass {
 
   setMarkerScales(cyan: number, yellow: number): void {
     this.cyanScaleUniform.value = Math.max(0.01, cyan);
-    this.yellowScaleUniform.value = Math.max(0.01, yellow);
+    this.yellowScaleUniform.value = yellow > 0 ? yellow : 0;
   }
 
   setMarkerOpacities(cyan: number, yellow: number): void {

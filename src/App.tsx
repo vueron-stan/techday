@@ -7,7 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, PivotControls } from '@react-three/drei';
 import * as THREE from 'three/webgpu';
 import { GLTFLoader, HDRLoader } from 'three/examples/jsm/Addons.js';
 import {
@@ -162,7 +162,7 @@ interface FrustumData {
 }
 
 /** 광선–외접 구면 교점 하이라이트 색 */
-const SPHERE_HIT_COLOR = '#00ffc8';
+const SPHERE_HIT_COLOR = '#ffff00';
 
 /**
  * WebGPU 는 `Points` 프리티브 크기를 1px 로만 그릴 수 있어 `PointsMaterial.size`가 무시됨.
@@ -226,6 +226,11 @@ const frustumFovX = THREE.MathUtils.radToDeg(
   2 * Math.atan((16 / 9) * Math.tan(THREE.MathUtils.degToRad(frustumFovY / 2))),
 );
 
+function setOrbitControlsEnabled(controls: unknown, enabled: boolean) {
+  const c = controls as { enabled?: boolean } | null | undefined;
+  if (c && typeof c.enabled === 'boolean') c.enabled = enabled;
+}
+
 /** `SceneSnapshot` 필드 + 런타임 `carRaycastTarget`(GLB 마운트) */
 interface FrustumVisualizerProps {
   sphereOpacity: number;
@@ -255,11 +260,9 @@ interface FrustumVisualizerProps {
   lidarSampleRateHz: number;
   /** 라이다 시뮬 최대 거리(far) */
   lidarMaxRange: number;
-  /** 차량 주행 중 등 — Hz 스로틀 없이 매 프레임 깊이·포인트 갱신 */
-  forceLidarEveryFrame: boolean;
+  /** 차량 주행(carDrive) 중 와이어 외접 구가 차 메시와 깊이 정렬로 깜빡일 때 뒤로 밀리지 않게 renderOrder 상승 */
+  carDriveActive: boolean;
 }
-
-const SENSOR_MATRIX = new THREE.Matrix4();
 
 function MainCameraEnableFrustumGuideLayer() {
   const camera = useThree((s) => s.camera);
@@ -289,21 +292,36 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   lidarPyramidHeight,
   lidarSampleRateHz,
   lidarMaxRange,
-  forceLidarEveryFrame,
+  carDriveActive,
 }) => {
-  const { gl, scene } = useThree();
+  const { gl, scene, controls } = useThree();
   const guideRootRef = useRef<THREE.Group>(null);
   const gpuPassForFrameRef = useRef<GpuFrustumRayHitPass | null>(null);
   const [gpuPass, setGpuPass] = useState<GpuFrustumRayHitPass | null>(null);
   const lastGpuSampleTimeRef = useRef<number>(-Infinity);
+  /** 라이다 센서(프러스텀 가이드 + GPU 레이 원점) — 피라미드 클릭 후 PivotControls 로 편집 */
+  const [sensorMatrix, setSensorMatrix] = useState(() => new THREE.Matrix4());
+  const [lidarPivotSelected, setLidarPivotSelected] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLidarPivotSelected(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    setOrbitControlsEnabled(controls, !lidarPivotSelected);
+  }, [controls, lidarPivotSelected]);
+
+  useEffect(() => {
+    return () => setOrbitControlsEnabled(controls, true);
+  }, [controls]);
 
   useLayoutEffect(() => {
     lastGpuSampleTimeRef.current = -Infinity;
   }, [lidarSampleRateHz]);
-
-  useLayoutEffect(() => {
-    if (forceLidarEveryFrame) lastGpuSampleTimeRef.current = -Infinity;
-  }, [forceLidarEveryFrame]);
 
   const lidarPyramidGeometry = useMemo(
     () => buildLidarPyramidGeometry(lidarPyramidHeight, azimuthSpanDeg, polarSpanDeg),
@@ -395,16 +413,23 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
       return new Float32Array(0);
     }
 
+    const origin = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    sensorMatrix.decompose(origin, quat, scl);
+    const inv = new THREE.Matrix4().copy(sensorMatrix).invert();
+    const worldDir = new THREE.Vector3();
+
     carRaycastTarget.updateMatrixWorld(true);
     const raycaster = new THREE.Raycaster();
-    const origin = new THREE.Vector3(0, 0, 0);
     const hits: THREE.Vector3[] = [];
 
     for (const s of samples) {
       if (s.dir.z >= 0) continue;
-      raycaster.set(origin, s.dir);
+      worldDir.copy(s.dir).applyQuaternion(quat).normalize();
+      raycaster.set(origin, worldDir);
       const res = raycaster.intersectObject(carRaycastTarget, true);
-      if (res.length > 0) hits.push(res[0].point.clone());
+      if (res.length > 0) hits.push(res[0].point.clone().applyMatrix4(inv));
     }
 
     return new Float32Array(hits.flatMap((v) => [v.x, v.y, v.z]));
@@ -414,6 +439,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     samples,
     nearPlanePoints,
     runGpuHits,
+    sensorMatrix,
   ]);
 
   const sphereHitDisplayPositions = useMemo(() => {
@@ -424,15 +450,22 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
       return new Float32Array(0);
     }
 
+    const origin = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    sensorMatrix.decompose(origin, quat, scl);
+    const inv = new THREE.Matrix4().copy(sensorMatrix).invert();
+    const worldDir = new THREE.Vector3();
+
     carRaycastTarget.updateMatrixWorld(true);
     const raycaster = new THREE.Raycaster();
-    const origin = new THREE.Vector3(0, 0, 0);
     const pts: THREE.Vector3[] = [];
 
     for (const s of samples) {
-      raycaster.set(origin, s.dir);
+      worldDir.copy(s.dir).applyQuaternion(quat).normalize();
+      raycaster.set(origin, worldDir);
       const res = raycaster.intersectObject(carRaycastTarget, true);
-      if (res.length > 0) pts.push(res[0].point.clone());
+      if (res.length > 0) pts.push(res[0].point.clone().applyMatrix4(inv));
       else pts.push(s.dir.clone().multiplyScalar(sphereRadius));
     }
 
@@ -444,6 +477,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     sphereHitPoints,
     sphereRadius,
     runGpuHits,
+    sensorMatrix,
   ]);
 
   /* GpuFrustumRayHitPass 생성/해제를 React 트리(<primitive>)와 맞추려면 effect 내 setState가 필요함 */
@@ -484,12 +518,15 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     gpuPassForFrameRef.current = gpuPass;
     gpuPass.setMaxRange(sphereRadius);
     gpuPass.setMarkerScales(sphereHitSize, nearPointSize);
-    gpuPass.setMarkerOpacities(sphereHitOpacity, 1);
     gpuPass.setCyanUsesHitOnly(cyanDepthSim);
     gpuPass.setHitNoiseLevel(hitNoiseLevel);
     gpuPass.setMeshVisibility(
       cyanDepthSim,
-      !projectMarkersOnNearPlaneOnly,
+      !projectMarkersOnNearPlaneOnly && nearPointSize > 0,
+    );
+    gpuPass.setMarkerOpacities(
+      sphereHitOpacity,
+      nearPointSize > 0 ? 1 : 0,
     );
   }, [
     gpuPass,
@@ -508,20 +545,24 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     const renderer = gl as unknown as THREE.WebGPURenderer;
     if (!renderer.compute) return;
     const t = state.clock.elapsedTime;
-    if (!forceLidarEveryFrame) {
-      const hz = THREE.MathUtils.clamp(lidarSampleRateHz, 0.1, 20);
-      const interval = 1 / hz;
-      if (t - lastGpuSampleTimeRef.current < interval) return;
-    }
+    const hz = THREE.MathUtils.clamp(lidarSampleRateHz, 0.1, 20);
+    const interval = 1 / hz;
+    if (t - lastGpuSampleTimeRef.current < interval) return;
     lastGpuSampleTimeRef.current = t;
-    pass.execute(renderer, scene, SENSOR_MATRIX);
+    pass.execute(renderer, scene, sensorMatrix);
   }, -1);
 
   const linePositions = new Float32Array(lines.flatMap((v) => [v.x, v.y, v.z]));
 
   const showCpuCyan =
     !runGpuHits || cyanHitMode === 'sphereOnly' || sphereHitOpacity <= 0.001;
-  const showCpuYellow = !runGpuHits || projectMarkersOnNearPlaneOnly;
+  const showCpuYellow =
+    nearPointSize > 0 && (!runGpuHits || projectMarkersOnNearPlaneOnly);
+  /** 차 표면에 찍힌 CPU 점이 depth buffer에 밀리지 않게 */
+  const cpuCyanDrawOverCar =
+    showCpuCyan && cyanHitMode === 'depthSim' && carRaycastTarget != null;
+  const cpuYellowDrawOverCar =
+    showCpuYellow && !projectMarkersOnNearPlaneOnly && carRaycastTarget != null;
 
   useLayoutEffect(() => {
     const g = guideRootRef.current;
@@ -556,73 +597,96 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
 
   return (
     <>
-      <group ref={guideRootRef}>
-        <mesh>
-          <sphereGeometry args={[sphereRadius, 32, 32]} />
-          <meshStandardMaterial
-            color="#444444"
-            wireframe
-            transparent
-            opacity={sphereOpacity}
-            depthWrite={false}
-            depthTest
-          />
-        </mesh>
+      <PivotControls
+        matrix={sensorMatrix}
+        onDrag={(mL) => {
+          setSensorMatrix(mL.clone());
+        }}
+        visible={lidarPivotSelected}
+        enabled={lidarPivotSelected}
+        disableScaling
+        depthTest={false}
+        scale={1.25}
+        lineWidth={3}
+      >
+        <group ref={guideRootRef}>
+          <mesh renderOrder={carDriveActive ? 120 : 0}>
+            <sphereGeometry args={[sphereRadius, 32, 32]} />
+            <meshStandardMaterial
+              color="#444444"
+              wireframe
+              transparent
+              opacity={sphereOpacity}
+              depthWrite={false}
+              depthTest
+            />
+          </mesh>
 
-        <lineSegments>
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
-          </bufferGeometry>
-          <lineBasicMaterial
-            color="#8888ff"
-            transparent
-            opacity={lineOpacity}
-            depthWrite={false}
-          />
-        </lineSegments>
+          <lineSegments>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
+            </bufferGeometry>
+            <lineBasicMaterial
+              color="#8888ff"
+              transparent
+              opacity={lineOpacity}
+              depthWrite={false}
+            />
+          </lineSegments>
 
-        <mesh position={[0, 0, -near]}>
-          <planeGeometry args={[planeWidth, planeHeight]} />
-          <meshStandardMaterial
-            color="#ff4444"
-            transparent
-            opacity={planeOpacity}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-            depthTest
-          />
-        </mesh>
+          {/* <mesh position={[0, 0, -near]}>
+            <planeGeometry args={[planeWidth, planeHeight]} />
+            <meshStandardMaterial
+              color="#ff4444"
+              transparent
+              opacity={planeOpacity}
+              side={THREE.DoubleSide}
+              depthWrite={false}
+              depthTest
+            />
+          </mesh> */}
 
-        {showCpuCyan ? (
-          <InstancedSphereMarkers
-            id="sphere-hit"
-            positions={sphereHitDisplayPositions}
-            size={sphereHitSize}
-            color={SPHERE_HIT_COLOR}
-            opacity={sphereHitOpacity}
-          />
-        ) : null}
+          {showCpuCyan ? (
+            <InstancedSphereMarkers
+              id="sphere-hit"
+              positions={sphereHitDisplayPositions}
+              size={sphereHitSize}
+              color={SPHERE_HIT_COLOR}
+              opacity={sphereHitOpacity}
+              depthTest={!cpuCyanDrawOverCar}
+            />
+          ) : null}
 
-        {showCpuYellow ? (
-          <InstancedSphereMarkers
-            id="projection-hit"
-            positions={projectionMarkers}
-            size={nearPointSize}
-            color="#ffff00"
-            opacity={1}
-          />
-        ) : null}
+          {showCpuYellow ? (
+            <InstancedSphereMarkers
+              id="projection-hit"
+              positions={projectionMarkers}
+              size={nearPointSize}
+              color="#ffff00"
+              opacity={1}
+              depthTest={!cpuYellowDrawOverCar}
+            />
+          ) : null}
 
-        <mesh geometry={lidarPyramidGeometry}>
-          <meshStandardMaterial
-            color="#cc2222"
-            transparent
-            opacity={0.3}
-            depthWrite={false}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      </group>
+          <mesh
+            geometry={lidarPyramidGeometry}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              // 같은 클릭에서 Orbit이 먼저 잡지 않도록 즉시 끔 (useEffect는 한 틱 늦을 수 있음)
+              setOrbitControlsEnabled(controls, false);
+              setLidarPivotSelected(true);
+            }}
+          >
+            <meshStandardMaterial
+              color={lidarPivotSelected ? '#ff4444' : '#cc2222'}
+              transparent
+              opacity={0.35}
+              depthWrite={false}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        </group>
+      </PivotControls>
 
       {gpuPass ? (
         <>
@@ -753,6 +817,39 @@ function SliderRow({
         style={{ width: 120 }}
       />
     </label>
+  );
+}
+
+function PanelGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        padding: '12px 14px 14px',
+        marginBottom: 6,
+        borderRadius: 8,
+        background: 'rgba(255,255,255,0.035)',
+        boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: 'rgba(150, 200, 255, 0.8)',
+          letterSpacing: '0.03em',
+          marginBottom: 10,
+        }}
+      >
+        {title}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -1107,7 +1204,7 @@ export default function App() {
           lidarPyramidHeight={lidarPyramidHeight}
           lidarSampleRateHz={lidarSampleRateHz}
           lidarMaxRange={lidarMaxRange}
-          forceLidarEveryFrame={carWorldPosition !== null}
+          carDriveActive={carWorldPosition !== null}
         />
         <ManagedOrbitControls
           onRelease={(pos, tgt) => {
@@ -1193,272 +1290,256 @@ export default function App() {
               WebkitOverflowScrolling: 'touch',
             }}
           >
-            <SliderRow
-              label="라이다 위치 피라미드 (전방 길이)"
-              value={lidarPyramidHeight}
-              min={0.08}
-              max={2.5}
-              step={0.02}
-              unit=""
-              onChange={setLidarPyramidHeight}
-            />
-            <SliderRow
-              label="구(와이어프레임) 투명도"
-              value={sphereOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setSphereOpacity}
-            />
-            <SliderRow
-              label="광선(선분) 투명도"
-              value={lineOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setLineOpacity}
-            />
-            <SliderRow
-              label="구면 교점(시안) 크기"
-              value={sphereHitSize}
-              min={0.02}
-              max={0.5}
-              step={0.01}
-              unit=""
-              onChange={setSphereHitSize}
-            />
-            <SliderRow
-              label="구면 교점 투명도"
-              value={sphereHitOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setSphereHitOpacity}
-            />
-            <SliderRow
-              label="투영 점(노랑) 크기 — 레이캐스트 또는 near"
-              value={nearPointSize}
-              min={0.02}
-              max={0.5}
-              step={0.01}
-              unit=""
-              onChange={setNearPointSize}
-            />
-            <SliderRow
-              label="GPU 히트 위치 노이즈"
-              value={hitNoiseLevel}
-              min={0}
-              max={0.3}
-              step={0.01}
-              unit=""
-              onChange={setHitNoiseLevel}
-            />
-            <SliderRow
-              label="라이다/깊이 포인트 갱신 주파수"
-              value={lidarSampleRateHz}
-              min={0.1}
-              max={20}
-              step={0.1}
-              unit=" Hz"
-              onChange={setLidarSampleRateHz}
-            />
-            <SliderRow
-              label="라이다 최대 거리 (far / range)"
-              value={lidarMaxRange}
-              min={5}
-              max={100}
-              step={1}
-              unit=""
-              onChange={setLidarMaxRange}
-            />
-            <SliderRow
-              label="뷰 평면(near 면) 투명도"
-              value={planeOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setPlaneOpacity}
-            />
-            <SliderRow
-              label="자동차 투명도 (0 = 완전 숨김)"
-              value={carOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setCarOpacity}
-            />
-            <SliderRow
-              label="차량 월드 Z (전후)"
-              value={carZSlider}
-              min={-90}
-              max={10}
-              step={0.5}
-              unit=""
-              onChange={(z) => {
-                cancelCarDrive();
-                setCarZSlider(z);
-              }}
-            />
-            <SliderRow
-              label="바닥(street) 투명도 (0 = 레이·깊이 통과)"
-              value={streetOpacity}
-              min={0}
-              max={1}
-              step={0.02}
-              unit=""
-              onChange={setStreetOpacity}
-            />
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
-                marginBottom: 12,
-                fontSize: 13,
-                color: '#ccc',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={projectMarkersOnNearPlaneOnly}
-                onChange={(e) => setProjectMarkersOnNearPlaneOnly(e.target.checked)}
-                style={{ marginTop: 3 }}
+            {/*
+              패널 순서(의도 유지): 차량·바닥 → 카메라·배경 → 프러스텀·격자 → 가이드(뷰 평면 투명도 슬라이더는 주석 유지) → 교차점·시안 → 라이다.
+              FrustumVisualizer: near 빨간 뷰 평면 mesh 주석은 필요 시 여기와 슬라이더를 함께 복구.
+            */}
+            <PanelGroup title="차량 · 바닥">
+              <SliderRow
+                label="자동차 투명도 (0 = 완전 숨김)"
+                value={carOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setCarOpacity}
               />
-              <span>
-                노란 투영점을 <strong style={{ color: '#9df' }}>near 평면(수식)</strong>만 사용
-                <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
-                  끄면 원점에서 광선마다 <strong style={{ color: '#fd9' }}>Raycaster → car.glb</strong> 표면
-                  교차(미적중 시 near 평면 규칙으로 폴백).
-                </span>
-              </span>
-            </label>
-            <fieldset
-              style={{
-                border: 'none',
-                padding: 0,
-                margin: '0 0 12px',
-              }}
-            >
-              <legend
+              <SliderRow
+                label="차량 월드 Z (전후)"
+                value={carZSlider}
+                min={-90}
+                max={10}
+                step={0.5}
+                unit=""
+                onChange={(z) => {
+                  cancelCarDrive();
+                  setCarZSlider(z);
+                }}
+              />
+              <SliderRow
+                label="바닥(street) 투명도 (0 = 레이·깊이 통과)"
+                value={streetOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setStreetOpacity}
+              />
+            </PanelGroup>
+            <PanelGroup title="카메라 · 배경">
+              <SliderRow
+                label="HDR 배경 강도 (backgroundIntensity)"
+                value={backgroundIntensity}
+                min={0}
+                max={3}
+                step={0.05}
+                unit=""
+                onChange={setBackgroundIntensity}
+              />
+            </PanelGroup>
+            <PanelGroup title="프러스텀 · 격자">
+              <SliderRow
+                label="뷰 평면 ↔ 원점 거리 (near)"
+                value={near}
+                min={0.4}
+                max={12}
+                step={0.1}
+                unit=""
+                onChange={setNear}
+              />
+              <SliderRow
+                label="가로 — 방위각(azimuth, θ) 범위"
+                value={azimuthSpanDeg}
+                min={15}
+                max={180}
+                step={1}
+                unit="°"
+                onChange={setAzimuthSpanDeg}
+              />
+              <SliderRow
+                label="세로 — 극각(polar, φ) 범위"
+                value={polarSpanDeg}
+                min={15}
+                max={180}
+                step={1}
+                unit="°"
+                onChange={setPolarSpanDeg}
+              />
+              <SliderRow
+                label="가로 격자 구간 수 (θ)"
+                value={azimuthDivisions}
+                min={2}
+                max={256}
+                step={1}
+                unit="개"
+                onChange={setAzimuthDivisions}
+              />
+              <SliderRow
+                label="세로 격자 구간 수 (φ)"
+                value={polarDivisions}
+                min={2}
+                max={128}
+                step={1}
+                unit="개"
+                onChange={setPolarDivisions}
+              />
+            </PanelGroup>
+            <PanelGroup title="가이드 (구·선·뷰 평면)">
+              <SliderRow
+                label="광선(선분) 투명도"
+                value={lineOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setLineOpacity}
+              />
+              <SliderRow
+                label="구(와이어프레임) 투명도"
+                value={sphereOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setSphereOpacity}
+              />
+              {/* 뷰 평면 mesh 비활성 시 슬라이더도 함께 주석 — 복구 시 FrustumVisualizer near plane 주석 해제 */}
+              {/* <SliderRow
+                label="뷰 평면(near 면) 투명도"
+                value={planeOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setPlaneOpacity}
+              /> */}
+            </PanelGroup>
+            <PanelGroup title="교차점 · 시안">
+              <SliderRow
+                label="구면 교점(시안) 크기"
+                value={sphereHitSize}
+                min={0.02}
+                max={0.5}
+                step={0.01}
+                unit=""
+                onChange={setSphereHitSize}
+              />
+              <SliderRow
+                label="구면 교점 투명도"
+                value={sphereHitOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setSphereHitOpacity}
+              />
+              <fieldset
                 style={{
-                  fontSize: 13,
-                  color: '#ccc',
-                  marginBottom: 8,
+                  border: 'none',
                   padding: 0,
+                  margin: '0 0 4px',
                 }}
               >
-                시안(구면 교점)
-              </legend>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                  marginBottom: 8,
-                  fontSize: 13,
-                  color: '#ccc',
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="radio"
-                  name="cyanHitMode"
-                  checked={cyanHitMode === 'sphereOnly'}
-                  onChange={() => setCyanHitMode('sphereOnly')}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  <strong style={{ color: '#9df' }}>구면에만</strong> 투영
-                  <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
-                    외접 구면과의 해석적 교차(차·바닥과 무관).
+                <legend
+                  style={{
+                    fontSize: 13,
+                    color: '#ccc',
+                    marginBottom: 8,
+                    padding: 0,
+                  }}
+                >
+                  시안(구면 교점)
+                </legend>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    marginBottom: 8,
+                    fontSize: 13,
+                    color: '#ccc',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="cyanHitMode"
+                    checked={cyanHitMode === 'sphereOnly'}
+                    onChange={() => setCyanHitMode('sphereOnly')}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <strong style={{ color: '#9df' }}>구면에만</strong> 투영
+                    <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
+                      외접 구면과의 해석적 교차(차·바닥과 무관).
+                    </span>
                   </span>
-                </span>
-              </label>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                  fontSize: 13,
-                  color: '#ccc',
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="radio"
-                  name="cyanHitMode"
-                  checked={cyanHitMode === 'depthSim'}
-                  onChange={() => setCyanHitMode('depthSim')}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  <strong style={{ color: '#fd9' }}>차량, 바닥</strong>에 시뮬레이션
-                  <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
-                    GPU 깊이 맵으로 메시 표면에 포인트(차·street 가시 시).
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    fontSize: 13,
+                    color: '#ccc',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="cyanHitMode"
+                    checked={cyanHitMode === 'depthSim'}
+                    onChange={() => setCyanHitMode('depthSim')}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <strong style={{ color: '#fd9' }}>차량, 바닥</strong>에 시뮬레이션
+                    <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
+                      GPU 깊이 맵으로 메시 표면에 포인트(차·street 가시 시).
+                    </span>
                   </span>
-                </span>
-              </label>
-            </fieldset>
-            <SliderRow
-              label="HDR 배경 강도 (backgroundIntensity)"
-              value={backgroundIntensity}
-              min={0}
-              max={3}
-              step={0.05}
-              unit=""
-              onChange={setBackgroundIntensity}
-            />
-            <SliderRow
-              label="뷰 평면 ↔ 원점 거리 (near)"
-              value={near}
-              min={0.4}
-              max={12}
-              step={0.1}
-              unit=""
-              onChange={setNear}
-            />
-            <SliderRow
-              label="가로 — 방위각(azimuth, θ) 범위"
-              value={azimuthSpanDeg}
-              min={15}
-              max={180}
-              step={1}
-              unit="°"
-              onChange={setAzimuthSpanDeg}
-            />
-            <SliderRow
-              label="세로 — 극각(polar, φ) 범위"
-              value={polarSpanDeg}
-              min={15}
-              max={180}
-              step={1}
-              unit="°"
-              onChange={setPolarSpanDeg}
-            />
-            <SliderRow
-              label="가로 격자 구간 수 (θ)"
-              value={azimuthDivisions}
-              min={2}
-              max={80}
-              step={1}
-              unit="개"
-              onChange={setAzimuthDivisions}
-            />
-            <SliderRow
-              label="세로 격자 구간 수 (φ)"
-              value={polarDivisions}
-              min={2}
-              max={80}
-              step={1}
-              unit="개"
-              onChange={setPolarDivisions}
-            />
+                </label>
+              </fieldset>
+            </PanelGroup>
+            <PanelGroup title="라이다 시뮬">
+              <SliderRow
+                label="라이다 위치 피라미드 (전방 길이)"
+                value={lidarPyramidHeight}
+                min={0.08}
+                max={2.5}
+                step={0.02}
+                unit=""
+                onChange={setLidarPyramidHeight}
+              />
+              <SliderRow
+                label="GPU 히트 위치 노이즈"
+                value={hitNoiseLevel}
+                min={0}
+                max={0.3}
+                step={0.01}
+                unit=""
+                onChange={setHitNoiseLevel}
+              />
+              <SliderRow
+                label="라이다/깊이 포인트 갱신 주파수"
+                value={lidarSampleRateHz}
+                min={0.1}
+                max={20}
+                step={0.1}
+                unit=" Hz"
+                onChange={setLidarSampleRateHz}
+              />
+              <SliderRow
+                label="라이다 최대 거리 (far / range)"
+                value={lidarMaxRange}
+                min={5}
+                max={100}
+                step={1}
+                unit=""
+                onChange={setLidarMaxRange}
+              />
+            </PanelGroup>
+
           </div>
         ) : null}
 

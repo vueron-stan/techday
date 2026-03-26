@@ -13,68 +13,87 @@ export interface CarDriveConfig {
 /**
  * 프리셋·초기값·슬라이더가 공유하는 스냅샷 — `PRESETS` 항목을 자유롭게 수정하세요.
  * (`App`의 `FrustumVisualizer`에 넘기는 값과 동일. `carRaycastTarget`만 GLB에서 런타임 주입)
+ *
+ * 필드는 왼쪽 패널·문서 가독을 위해 카테고리 순으로 배열했습니다.
  */
 export interface SceneSnapshot {
-  sphereOpacity: number;
-  lineOpacity: number;
-  planeOpacity: number;
+  /* ─── 프러스텀 · 격자 ─── */
   near: number;
   azimuthSpanDeg: number;
   polarSpanDeg: number;
   azimuthDivisions: number;
   polarDivisions: number;
+
+  /* ─── 가이드 (구·선·뷰 평면) ─── */
+  sphereOpacity: number;
+  lineOpacity: number;
+  planeOpacity: number;
+
+  /* ─── 교차점 · 투영점 ─── */
   /** 광선과 외접 구면 교점(점 스프라이트) */
   sphereHitSize: number;
   sphereHitOpacity: number;
-  /** near 평면 교차점(노란 점) */
+  /** near 평면 교차점(노란 점) — 0이면 비표시 */
   nearPointSize: number;
-  backgroundIntensity: number;
-  cameraPosition: Vec3;
-  orbitTarget: Vec3;
-  /** 0이면 차량 숨김 — 레이캐스트 타깃도 끔 */
-  carOpacity: number;
-  /** 0이면 바닥(street) 깊이·레이 비기여 — `FrustumVisualizer`의 `streetOpacity`와 동일 */
-  streetOpacity: number;
-  /** GPU 깊이 히트 위치 노이즈 (world, 0–0.3 권장) */
-  hitNoiseLevel: number;
-  /** 라이다 원점 피라미드 전방 길이 */
-  lidarPyramidHeight: number;
-  /** GPU 깊이 패스·포인트 갱신 주파수 (Hz) */
-  lidarSampleRateHz: number;
-  /** 라이다/프러스텀 최대 거리(far, 월드) — 광선 끝·외접 구 반경·GPU maxRange */
-  lidarMaxRange: number;
   /** true면 노란 점을 near 평면 해석만 사용 */
   projectMarkersOnNearPlaneOnly: boolean;
   /** 시안: 구면 해석만 / GPU 깊이로 차·바닥 시뮬 */
   cyanHitMode: CyanHitMode;
+
+  /* ─── 라이다 시뮬 ─── */
+  /** GPU 깊이 히트 위치 노이즈 (world, 0–0.3 권장) */
+  hitNoiseLevel: number;
+  /** 라이다 원점 피라미드 전방 길이 */
+  lidarPyramidHeight: number;
+  /** GPU 깊이 패스·포인트 갱신 주파수 (Hz) — 차량 주행 중에도 동일 간격으로만 갱신 */
+  lidarSampleRateHz: number;
+  /** 라이다/프러스텀 최대 거리(far, 월드) — 광선 끝·외접 구 반경·GPU maxRange */
+  lidarMaxRange: number;
+
+  /* ─── 차량 · 바닥 ─── */
+  /** 0이면 차량 숨김 — 레이캐스트 타깃도 끔 */
+  carOpacity: number;
+  /** 0이면 바닥(street) 깊이·레이 비기여 — `FrustumVisualizer`의 `streetOpacity`와 동일 */
+  streetOpacity: number;
+
+  /* ─── 카메라 · 환경 ─── */
+  backgroundIntensity: number;
+  cameraPosition: Vec3;
+  orbitTarget: Vec3;
+
   /** 프리셋 버튼으로 진입할 때만 사용 — 슬라이더 스냅샷에는 보통 없음 */
   carDrive?: CarDriveConfig;
 }
 
 /** 발표 스텝 1: 하늘(HDR) + 센서 원점(빨간 점), 프러스텀 거의 끔 */
 export const INITIAL_SCENE: SceneSnapshot = {
-  sphereOpacity: 0.0,
-  lineOpacity: 0.1,
-  planeOpacity: 0,
   near: 7,
   azimuthSpanDeg: 120,
   polarSpanDeg: 30,
   azimuthDivisions: 80,
   polarDivisions: 32,
+
+  sphereOpacity: 0.0,
+  lineOpacity: 0.1,
+  planeOpacity: 0,
+
   sphereHitSize: 0.05,
   sphereHitOpacity: 0,
-  nearPointSize: 0.004,
-  backgroundIntensity: 1.15,
-  cameraPosition: [7, 5, 9],
-  orbitTarget: [0, 0, 0],
-  carOpacity: 0,
-  streetOpacity: 1,
+  nearPointSize: 0,
+  projectMarkersOnNearPlaneOnly: false,
+  cyanHitMode: 'sphereOnly',
+
   hitNoiseLevel: 0.03,
   lidarPyramidHeight: 1,
   lidarSampleRateHz: 10,
   lidarMaxRange: 70,
-  projectMarkersOnNearPlaneOnly: false,
-  cyanHitMode: 'sphereOnly',
+
+  carOpacity: 0,
+  streetOpacity: 1,
+
+  backgroundIntensity: 1.15,
+  cameraPosition: [7, 5, 9],
+  orbitTarget: [0, 0, 0],
 };
 
 /**
@@ -96,7 +115,7 @@ export const PRESETS: SceneSnapshot[] = [
     // sphereOpacity: 0.02,
     planeOpacity: 0.02,
     sphereHitOpacity: 0.45,
-    nearPointSize: 0.004,
+    nearPointSize: 0,
     near: 6,
     cameraPosition: [5.5, 3.8, 7.5],
     orbitTarget: [0, 0, 0],
@@ -107,7 +126,7 @@ export const PRESETS: SceneSnapshot[] = [
     cyanHitMode: 'depthSim',
     carDrive: {
       start: [-3, -2.1, -(6 * 0.7) - 45],
-      end: [-3, -2.1, -5],
+      end: [-3, -2.1, -10],
       durationMs: 8000,
     },
   },
@@ -118,7 +137,7 @@ export const PRESETS: SceneSnapshot[] = [
     // sphereOpacity: 0.02,
     planeOpacity: 0.02,
     sphereHitOpacity: 0.45,
-    nearPointSize: 0.004,
+    nearPointSize: 0,
     near: 6,
     cameraPosition: [5.5, 3.8, 7.5],
     orbitTarget: [0, 0, 0],
@@ -129,7 +148,7 @@ export const PRESETS: SceneSnapshot[] = [
     cyanHitMode: 'depthSim',
     carDrive: {
       start: [-3, -2.1, -(6 * 0.7) - 45],
-      end: [-3, -2.1, -5],
+      end: [-3, -2.1, -10],
       durationMs: 8000,
     },
   },
@@ -140,7 +159,7 @@ export const PRESETS: SceneSnapshot[] = [
     lineOpacity: 0.4,
     planeOpacity: 0.08,
     sphereHitOpacity: 0.9,
-    nearPointSize: 0.1,
+    nearPointSize: 0,
     near: 6,
     azimuthSpanDeg: 72,
     polarSpanDeg: 52,
@@ -160,7 +179,7 @@ export const PRESETS: SceneSnapshot[] = [
     lineOpacity: 0.38,
     planeOpacity: 0.1,
     sphereHitOpacity: 0.88,
-    nearPointSize: 0.12,
+    nearPointSize: 0,
     near: 6,
     azimuthSpanDeg: 72,
     polarSpanDeg: 52,
@@ -180,7 +199,7 @@ export const PRESETS: SceneSnapshot[] = [
     lineOpacity: 0.34,
     planeOpacity: 0.12,
     sphereHitOpacity: 0.92,
-    nearPointSize: 0.14,
+    nearPointSize: 0,
     near: 5.5,
     azimuthSpanDeg: 72,
     polarSpanDeg: 52,
@@ -200,7 +219,7 @@ export const PRESETS: SceneSnapshot[] = [
     lineOpacity: 0.28,
     planeOpacity: 0.7,
     sphereHitOpacity: 0.85,
-    nearPointSize: 0.16,
+    nearPointSize: 0,
     near: 4.2,
     azimuthSpanDeg: 68,
     polarSpanDeg: 48,
@@ -220,7 +239,7 @@ export const PRESETS: SceneSnapshot[] = [
     lineOpacity: 0.22,
     planeOpacity: 0.78,
     sphereHitOpacity: 0.32,
-    nearPointSize: 0.18,
+    nearPointSize: 0,
     near: 4,
     azimuthSpanDeg: 68,
     polarSpanDeg: 48,
