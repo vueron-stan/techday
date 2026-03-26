@@ -36,6 +36,16 @@ function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+/** GPU 패스 재생성을 묶어 슬라이더/프리셋 연속 변경 시 점이 비었다가 채워지는 깜빡임 완화 */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 interface FrustumRaySample {
   dir: THREE.Vector3;
   /** 카메라 전방(z<0)이고 프러스텀 near 직사각형 안이면 near 평면과의 교점 */
@@ -167,6 +177,13 @@ const frustumFovX = THREE.MathUtils.radToDeg(
   2 * Math.atan((16 / 9) * Math.tan(THREE.MathUtils.degToRad(frustumFovY / 2))),
 );
 
+/** ConeGeometry: 꼭짓점 +Y → 라이다 전방 −Z 축(밑면이 −Z로 열림). `position.z = -h/2`로 꼭짓점을 원점에 둠 */
+const LIDAR_PYRAMID_QUAT = new THREE.Quaternion().setFromUnitVectors(
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(0, 0, 1),
+);
+
+/** `SceneSnapshot` 필드 + 런타임 `carRaycastTarget`(GLB 마운트) */
 interface FrustumVisualizerProps {
   sphereOpacity: number;
   lineOpacity: number;
@@ -187,6 +204,12 @@ interface FrustumVisualizerProps {
   sphereHitProjectOnCar: boolean;
   /** 바닥(street) 투명도 — 0이면 깊이/레이 통과 */
   streetOpacity: number;
+  /** GPU 깊이 히트 위치 노이즈 (world 단위, 0–0.3) */
+  hitNoiseLevel: number;
+  /** 라이다 원점 표시: 전방 −Z로 선 사각 피라미드 높이(꼭짓점~밑면) */
+  lidarPyramidHeight: number;
+  /** GPU 깊이/포인트 `execute` 갱신 주파수 (Hz) */
+  lidarSampleRateHz: number;
 }
 
 const SENSOR_MATRIX = new THREE.Matrix4();
@@ -215,17 +238,43 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   projectMarkersOnNearPlaneOnly,
   sphereHitProjectOnCar,
   streetOpacity,
+  hitNoiseLevel,
+  lidarPyramidHeight,
+  lidarSampleRateHz,
 }) => {
   const { gl, scene } = useThree();
   const guideRootRef = useRef<THREE.Group>(null);
   const gpuPassForFrameRef = useRef<GpuFrustumRayHitPass | null>(null);
   const [gpuPass, setGpuPass] = useState<GpuFrustumRayHitPass | null>(null);
+  const lastGpuSampleTimeRef = useRef<number>(-Infinity);
+
+  useLayoutEffect(() => {
+    lastGpuSampleTimeRef.current = -Infinity;
+  }, [lidarSampleRateHz]);
 
   const depthSceneActive =
     streetOpacity > 0 || carRaycastTarget != null;
   const runGpuHits =
     depthSceneActive &&
     (!projectMarkersOnNearPlaneOnly || sphereHitProjectOnCar);
+
+  const GPU_PASS_RECREATE_DEBOUNCE_MS = 90;
+  const debouncedAzimuthSpanDeg = useDebouncedValue(
+    azimuthSpanDeg,
+    GPU_PASS_RECREATE_DEBOUNCE_MS,
+  );
+  const debouncedPolarSpanDeg = useDebouncedValue(
+    polarSpanDeg,
+    GPU_PASS_RECREATE_DEBOUNCE_MS,
+  );
+  const debouncedAzimuthDivisions = useDebouncedValue(
+    azimuthDivisions,
+    GPU_PASS_RECREATE_DEBOUNCE_MS,
+  );
+  const debouncedPolarDivisions = useDebouncedValue(
+    polarDivisions,
+    GPU_PASS_RECREATE_DEBOUNCE_MS,
+  );
 
   const { lines, nearPlanePoints, sphereHitPoints, sphereRadius, planeWidth, planeHeight, samples } =
     useMemo<FrustumData>(() => {
@@ -341,21 +390,28 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
       return;
     }
     const cfg = {
-      azimuthSpanDeg,
-      polarSpanDeg,
-      azimuthDivisions,
-      polarDivisions,
+      azimuthSpanDeg: debouncedAzimuthSpanDeg,
+      polarSpanDeg: debouncedPolarSpanDeg,
+      azimuthDivisions: debouncedAzimuthDivisions,
+      polarDivisions: debouncedPolarDivisions,
       depthNear: 0.05,
       depthTextureSize: 512,
     };
     const p = new GpuFrustumRayHitPass(cfg);
     setGpuPass(p);
     gpuPassForFrameRef.current = p;
+    lastGpuSampleTimeRef.current = -Infinity;
     return () => {
       p.dispose();
       gpuPassForFrameRef.current = null;
     };
-  }, [runGpuHits, azimuthSpanDeg, polarSpanDeg, azimuthDivisions, polarDivisions]);
+  }, [
+    runGpuHits,
+    debouncedAzimuthSpanDeg,
+    debouncedPolarSpanDeg,
+    debouncedAzimuthDivisions,
+    debouncedPolarDivisions,
+  ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useLayoutEffect(() => {
@@ -365,8 +421,9 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     gpuPass.setMarkerScales(sphereHitSize, nearPointSize);
     gpuPass.setMarkerOpacities(sphereHitOpacity, 1);
     gpuPass.setCyanUsesHitOnly(sphereHitProjectOnCar);
+    gpuPass.setHitNoiseLevel(hitNoiseLevel);
     gpuPass.setMeshVisibility(
-      sphereHitProjectOnCar && sphereHitOpacity > 0.001,
+      sphereHitProjectOnCar,
       !projectMarkersOnNearPlaneOnly,
     );
   }, [
@@ -377,13 +434,19 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     sphereHitOpacity,
     sphereHitProjectOnCar,
     projectMarkersOnNearPlaneOnly,
+    hitNoiseLevel,
   ]);
 
-  useFrame(() => {
+  useFrame((state) => {
     const pass = gpuPassForFrameRef.current;
     if (!pass) return;
     const renderer = gl as unknown as THREE.WebGPURenderer;
     if (!renderer.compute) return;
+    const hz = THREE.MathUtils.clamp(lidarSampleRateHz, 0.1, 20);
+    const interval = 1 / hz;
+    const t = state.clock.elapsedTime;
+    if (t - lastGpuSampleTimeRef.current < interval) return;
+    lastGpuSampleTimeRef.current = t;
     pass.execute(renderer, scene, SENSOR_MATRIX);
   }, -1);
 
@@ -418,6 +481,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     showCpuYellow,
     sphereHitDisplayPositions,
     projectionMarkers,
+    lidarPyramidHeight,
   ]);
 
   return (
@@ -479,9 +543,28 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
           />
         ) : null}
 
-        <mesh>
-          <sphereGeometry args={[0.1, 16, 16]} />
-          <meshStandardMaterial color="#ff0000" />
+        <mesh
+          position={[0, 0, -lidarPyramidHeight / 2]}
+          quaternion={LIDAR_PYRAMID_QUAT}
+        >
+          <coneGeometry
+            args={[
+              lidarPyramidHeight * 0.52,
+              lidarPyramidHeight,
+              4,
+              1,
+              false,
+              Math.PI / 4,
+            ]}
+          />
+          <meshStandardMaterial
+            color="#cc2222"
+            transparent
+            opacity={0.3}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+            // wireframe
+          />
         </mesh>
       </group>
 
@@ -706,6 +789,18 @@ function Street({
         position={[0, -2, -30]}
         rotation={[0, 0, 0]}
       />
+      <primitive
+        object={gltf.scene.clone(true)}
+        scale={[0.02, 0.02, 0.02]}
+        position={[0, -2, -60]}
+        rotation={[0, 0, 0]}
+      />
+      <primitive
+        object={gltf.scene.clone(true)}
+        scale={[0.02, 0.02, 0.02]}
+        position={[0, -2, -90]}
+        rotation={[0, 0, 0]}
+      />
     </group>
 
   );
@@ -738,7 +833,14 @@ export default function App() {
   );
   const [carRaycastTarget, setCarRaycastTarget] = useState<THREE.Object3D | null>(null);
   const [carOpacity, setCarOpacity] = useState(INITIAL_SCENE.carOpacity);
-  const [streetOpacity, setStreetOpacity] = useState(1);
+  const [streetOpacity, setStreetOpacity] = useState(INITIAL_SCENE.streetOpacity);
+  const [hitNoiseLevel, setHitNoiseLevel] = useState(INITIAL_SCENE.hitNoiseLevel);
+  const [lidarPyramidHeight, setLidarPyramidHeight] = useState(
+    INITIAL_SCENE.lidarPyramidHeight,
+  );
+  const [lidarSampleRateHz, setLidarSampleRateHz] = useState(
+    INITIAL_SCENE.lidarSampleRateHz,
+  );
   /** Camera projection 옵션(슬라이더) 패널 — 기본 접힘 */
   const [projectionOptionsOpen, setProjectionOptionsOpen] = useState(false);
 
@@ -770,6 +872,10 @@ export default function App() {
     cameraPosition,
     orbitTarget,
     carOpacity,
+    streetOpacity,
+    hitNoiseLevel,
+    lidarPyramidHeight,
+    lidarSampleRateHz,
     projectMarkersOnNearPlaneOnly,
     sphereHitProjectOnCar,
   });
@@ -790,6 +896,10 @@ export default function App() {
     setCameraPosition([...s.cameraPosition]);
     setOrbitTarget([...s.orbitTarget]);
     setCarOpacity(s.carOpacity);
+    setStreetOpacity(s.streetOpacity);
+    setHitNoiseLevel(s.hitNoiseLevel);
+    setLidarPyramidHeight(s.lidarPyramidHeight);
+    setLidarSampleRateHz(s.lidarSampleRateHz);
     setProjectMarkersOnNearPlaneOnly(s.projectMarkersOnNearPlaneOnly);
     setSphereHitProjectOnCar(s.sphereHitProjectOnCar);
   };
@@ -821,6 +931,10 @@ export default function App() {
         cameraPosition: lerpVec3(from.cameraPosition, goal.cameraPosition, k),
         orbitTarget: lerpVec3(from.orbitTarget, goal.orbitTarget, k),
         carOpacity: lerp(from.carOpacity, goal.carOpacity, k),
+        streetOpacity: lerp(from.streetOpacity, goal.streetOpacity, k),
+        hitNoiseLevel: lerp(from.hitNoiseLevel, goal.hitNoiseLevel, k),
+        lidarPyramidHeight: lerp(from.lidarPyramidHeight, goal.lidarPyramidHeight, k),
+        lidarSampleRateHz: lerp(from.lidarSampleRateHz, goal.lidarSampleRateHz, k),
         projectMarkersOnNearPlaneOnly: goal.projectMarkersOnNearPlaneOnly,
         sphereHitProjectOnCar: goal.sphereHitProjectOnCar,
       });
@@ -880,6 +994,9 @@ export default function App() {
           projectMarkersOnNearPlaneOnly={projectMarkersOnNearPlaneOnly}
           sphereHitProjectOnCar={sphereHitProjectOnCar}
           streetOpacity={streetOpacity}
+          hitNoiseLevel={hitNoiseLevel}
+          lidarPyramidHeight={lidarPyramidHeight}
+          lidarSampleRateHz={lidarSampleRateHz}
         />
         <ManagedOrbitControls
           onRelease={(pos, tgt) => {
@@ -966,9 +1083,18 @@ export default function App() {
             }}
           >
             <SliderRow
+              label="라이다 위치 피라미드 (전방 길이)"
+              value={lidarPyramidHeight}
+              min={0.08}
+              max={2.5}
+              step={0.02}
+              unit=""
+              onChange={setLidarPyramidHeight}
+            />
+            <SliderRow
               label="구(와이어프레임) 투명도"
               value={sphereOpacity}
-              min={0.02}
+              min={0}
               max={1}
               step={0.02}
               unit=""
@@ -977,7 +1103,7 @@ export default function App() {
             <SliderRow
               label="광선(선분) 투명도"
               value={lineOpacity}
-              min={0.02}
+              min={0}
               max={1}
               step={0.02}
               unit=""
@@ -995,7 +1121,7 @@ export default function App() {
             <SliderRow
               label="구면 교점 투명도"
               value={sphereHitOpacity}
-              min={0.02}
+              min={0}
               max={1}
               step={0.02}
               unit=""
@@ -1011,9 +1137,27 @@ export default function App() {
               onChange={setNearPointSize}
             />
             <SliderRow
+              label="GPU 히트 위치 노이즈"
+              value={hitNoiseLevel}
+              min={0}
+              max={0.3}
+              step={0.01}
+              unit=""
+              onChange={setHitNoiseLevel}
+            />
+            <SliderRow
+              label="라이다/깊이 포인트 갱신 주파수"
+              value={lidarSampleRateHz}
+              min={0.1}
+              max={20}
+              step={0.1}
+              unit=" Hz"
+              onChange={setLidarSampleRateHz}
+            />
+            <SliderRow
               label="뷰 평면(near 면) 투명도"
               value={planeOpacity}
-              min={0.02}
+              min={0}
               max={1}
               step={0.02}
               unit=""

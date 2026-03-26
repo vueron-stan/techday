@@ -5,8 +5,10 @@
 import {
   Fn,
   If,
+  fract,
   instanceIndex,
   positionLocal,
+  sin,
   storage,
   texture,
   uniform,
@@ -130,6 +132,9 @@ export class GpuFrustumRayHitPass {
   private yellowScaleUniform = uniform(0.15);
   private cyanOpacityUniform = uniform(1);
   private yellowOpacityUniform = uniform(1);
+  /** 히트 위치 오프셋 최대 반경 ≈ noiseLevel (world 단위) */
+  private noiseUniform = uniform(0.05);
+  private timeUniform = uniform(0);
 
   readonly cyanMesh: THREE.InstancedMesh;
   readonly yellowMesh: THREE.InstancedMesh;
@@ -208,6 +213,8 @@ export class GpuFrustumRayHitPass {
       const farUniform = this.farUniform;
       const maxRangeUniform = this.maxRangeUniform;
       const rotationMatrixUniform = this.rotationMatrixUniform;
+      const noiseUniform = this.noiseUniform;
+      const timeUniform = this.timeUniform;
 
       const computeNode = Fn(() => {
         const i = instanceIndex.add(startIdx);
@@ -250,8 +257,15 @@ export class GpuFrustumRayHitPass {
               visibilityStorage.element(i).assign(0.0);
             },
           ).Else(() => {
+            const seed = i.toFloat().add(timeUniform.mul(10.0));
+            const randX = fract(sin(seed.mul(12.9898)).mul(43758.5453));
+            const randY = fract(sin(seed.mul(78.233)).mul(12345.6789));
+            const randZ = fract(sin(seed.mul(39.346)).mul(23421.631));
+            const noiseVec = vec3(randX, randY, randZ)
+              .sub(0.5)
+              .mul(noiseUniform.mul(2.0));
             visibilityStorage.element(i).assign(1.0);
-            positionStorage.element(i).assign(hitPos);
+            positionStorage.element(i).assign(hitPos.add(noiseVec));
           });
         });
       })().compute(p.count);
@@ -336,6 +350,10 @@ export class GpuFrustumRayHitPass {
     this.yellowOpacityUniform.value = yellow;
   }
 
+  setHitNoiseLevel(level: number): void {
+    this.noiseUniform.value = Math.max(0, level);
+  }
+
   setMeshVisibility(cyanVisible: boolean, yellowVisible: boolean): void {
     this.cyanMesh.visible = cyanVisible;
     this.yellowMesh.visible = yellowVisible;
@@ -364,6 +382,13 @@ export class GpuFrustumRayHitPass {
     sensorMatrixWorld: THREE.Matrix4,
   ): void {
     if (!renderer.compute || this.numPoints === 0) return;
+
+    // 노이즈가 0이면 time 을 고정해 매 샘플마다 점 위치가 흔들리지 않게 함
+    if ((this.noiseUniform.value as number) > 1e-6) {
+      this.timeUniform.value = performance.now() * 0.001;
+    } else {
+      this.timeUniform.value = 0;
+    }
 
     const sensorQuat = new THREE.Quaternion();
     const sensorScale = new THREE.Vector3();

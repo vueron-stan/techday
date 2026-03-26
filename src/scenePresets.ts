@@ -1,6 +1,9 @@
 export type Vec3 = readonly [number, number, number];
 
-/** 프리셋·초기값·슬라이더가 공유하는 스냅샷 — `PRESETS` 항목을 자유롭게 수정하세요 */
+/**
+ * 프리셋·초기값·슬라이더가 공유하는 스냅샷 — `PRESETS` 항목을 자유롭게 수정하세요.
+ * (`App`의 `FrustumVisualizer`에 넘기는 값과 동일. `carRaycastTarget`만 GLB에서 런타임 주입)
+ */
 export interface SceneSnapshot {
   sphereOpacity: number;
   lineOpacity: number;
@@ -20,6 +23,14 @@ export interface SceneSnapshot {
   orbitTarget: Vec3;
   /** 0이면 차량 숨김 — 레이캐스트 타깃도 끔 */
   carOpacity: number;
+  /** 0이면 바닥(street) 깊이·레이 비기여 — `FrustumVisualizer`의 `streetOpacity`와 동일 */
+  streetOpacity: number;
+  /** GPU 깊이 히트 위치 노이즈 (world, 0–0.3 권장) */
+  hitNoiseLevel: number;
+  /** 라이다 원점 피라미드 전방 길이 */
+  lidarPyramidHeight: number;
+  /** GPU 깊이 패스·포인트 갱신 주파수 (Hz) */
+  lidarSampleRateHz: number;
   /** true면 노란 점을 near 평면 해석만 사용 */
   projectMarkersOnNearPlaneOnly: boolean;
   /** true면 시안 점을 차량 메시 레이캐스트에 둠 */
@@ -43,6 +54,10 @@ export const INITIAL_SCENE: SceneSnapshot = {
   cameraPosition: [7, 5, 9],
   orbitTarget: [0, 0, 0],
   carOpacity: 0,
+  streetOpacity: 1,
+  hitNoiseLevel: 0.03,
+  lidarPyramidHeight: 2,
+  lidarSampleRateHz: 10,
   projectMarkersOnNearPlaneOnly: false,
   sphereHitProjectOnCar: false,
 };
