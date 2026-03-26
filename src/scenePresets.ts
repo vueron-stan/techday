@@ -1,5 +1,15 @@
 export type Vec3 = readonly [number, number, number];
 
+/** 시안 포인트: 외접 구면만 vs GPU 깊이(차·바닥) 시뮬 */
+export type CyanHitMode = 'sphereOnly' | 'depthSim';
+
+/** 프리셋 진입 시 차량 월드 위치 주행(없으면 App 기본 `[-3,-2.1,-near·0.7]`) */
+export interface CarDriveConfig {
+  start: Vec3;
+  end: Vec3;
+  durationMs: number;
+}
+
 /**
  * 프리셋·초기값·슬라이더가 공유하는 스냅샷 — `PRESETS` 항목을 자유롭게 수정하세요.
  * (`App`의 `FrustumVisualizer`에 넘기는 값과 동일. `carRaycastTarget`만 GLB에서 런타임 주입)
@@ -31,22 +41,26 @@ export interface SceneSnapshot {
   lidarPyramidHeight: number;
   /** GPU 깊이 패스·포인트 갱신 주파수 (Hz) */
   lidarSampleRateHz: number;
+  /** 라이다/프러스텀 최대 거리(far, 월드) — 광선 끝·외접 구 반경·GPU maxRange */
+  lidarMaxRange: number;
   /** true면 노란 점을 near 평면 해석만 사용 */
   projectMarkersOnNearPlaneOnly: boolean;
-  /** true면 시안 점을 차량 메시 레이캐스트에 둠 */
-  sphereHitProjectOnCar: boolean;
+  /** 시안: 구면 해석만 / GPU 깊이로 차·바닥 시뮬 */
+  cyanHitMode: CyanHitMode;
+  /** 프리셋 버튼으로 진입할 때만 사용 — 슬라이더 스냅샷에는 보통 없음 */
+  carDrive?: CarDriveConfig;
 }
 
 /** 발표 스텝 1: 하늘(HDR) + 센서 원점(빨간 점), 프러스텀 거의 끔 */
 export const INITIAL_SCENE: SceneSnapshot = {
-  sphereOpacity: 0.02,
-  lineOpacity: 0.02,
+  sphereOpacity: 0.0,
+  lineOpacity: 0.1,
   planeOpacity: 0,
   near: 7,
-  azimuthSpanDeg: 50,
-  polarSpanDeg: 40,
-  azimuthDivisions: 12,
-  polarDivisions: 8,
+  azimuthSpanDeg: 120,
+  polarSpanDeg: 30,
+  azimuthDivisions: 80,
+  polarDivisions: 32,
   sphereHitSize: 0.05,
   sphereHitOpacity: 0,
   nearPointSize: 0.004,
@@ -56,15 +70,16 @@ export const INITIAL_SCENE: SceneSnapshot = {
   carOpacity: 0,
   streetOpacity: 1,
   hitNoiseLevel: 0.03,
-  lidarPyramidHeight: 2,
+  lidarPyramidHeight: 1,
   lidarSampleRateHz: 10,
+  lidarMaxRange: 70,
   projectMarkersOnNearPlaneOnly: false,
-  sphereHitProjectOnCar: false,
+  cyanHitMode: 'sphereOnly',
 };
 
 /**
  * 우하단 1…8 버튼 — LiDAR 시뮬 발표 시나리오 (ease 보간 목표).
- * 5: 차는 보이나 시안은 구면(의도적 관통), 6: 메시 히트 on.
+ * 5: 차는 보이나 시안은 구면만, 6: 시안 depthSim(차 표면).
  */
 export const PRESETS: SceneSnapshot[] = [
   // 1 — 하늘 + 원점 (INITIAL과 동일 의도; 카메라만 살짝 다를 수 있음)
@@ -74,45 +89,49 @@ export const PRESETS: SceneSnapshot[] = [
     orbitTarget: [0, 0, 0],
     backgroundIntensity: 1.2,
   },
-  // 2 — 희소 레이만
+  // 2 — 희소 레이 + 차량 주행 + GPU 깊이 시뮬 (`carDrive`: 시작/끝 위치·시간)
   {
     ...INITIAL_SCENE,
-    lineOpacity: 0.42,
-    sphereOpacity: 0.02,
+    // lineOpacity: 0.42,
+    // sphereOpacity: 0.02,
     planeOpacity: 0.02,
-    sphereHitOpacity: 0.02,
+    sphereHitOpacity: 0.45,
     nearPointSize: 0.004,
     near: 6,
-    azimuthSpanDeg: 32,
-    polarSpanDeg: 26,
-    azimuthDivisions: 5,
-    polarDivisions: 4,
     cameraPosition: [5.5, 3.8, 7.5],
     orbitTarget: [0, 0, 0],
     backgroundIntensity: 1.05,
-    carOpacity: 0,
+    carOpacity: 1,
+    streetOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: false,
+    cyanHitMode: 'depthSim',
+    carDrive: {
+      start: [-3, -2.1, -(6 * 0.7) - 45],
+      end: [-3, -2.1, -5],
+      durationMs: 8000,
+    },
   },
   // 3 — 촘촘한 격자·넓은 FOV
   {
     ...INITIAL_SCENE,
-    lineOpacity: 0.48,
-    sphereOpacity: 0.04,
-    planeOpacity: 0.04,
-    sphereHitOpacity: 0.04,
-    nearPointSize: 0.006,
-    near: 6.5,
-    azimuthSpanDeg: 95,
-    polarSpanDeg: 72,
-    azimuthDivisions: 28,
-    polarDivisions: 16,
-    cameraPosition: [6.2, 4.5, 8.8],
+    // lineOpacity: 0.42,
+    // sphereOpacity: 0.02,
+    planeOpacity: 0.02,
+    sphereHitOpacity: 0.45,
+    nearPointSize: 0.004,
+    near: 6,
+    cameraPosition: [5.5, 3.8, 7.5],
     orbitTarget: [0, 0, 0],
-    backgroundIntensity: 1,
-    carOpacity: 0,
+    backgroundIntensity: 1.05,
+    carOpacity: 0.1,
+    streetOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: false,
+    cyanHitMode: 'depthSim',
+    carDrive: {
+      start: [-3, -2.1, -(6 * 0.7) - 45],
+      end: [-3, -2.1, -5],
+      durationMs: 8000,
+    },
   },
   // 4 — 거리 구면 + 시안(구면), 차 없음
   {
@@ -132,7 +151,7 @@ export const PRESETS: SceneSnapshot[] = [
     backgroundIntensity: 0.95,
     carOpacity: 0,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: false,
+    cyanHitMode: 'sphereOnly',
   },
   // 5 — 차량 등장, 구면 히트 유지(관통)
   {
@@ -152,7 +171,7 @@ export const PRESETS: SceneSnapshot[] = [
     backgroundIntensity: 0.9,
     carOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: false,
+    cyanHitMode: 'sphereOnly',
   },
   // 6 — 메시 히트
   {
@@ -172,7 +191,7 @@ export const PRESETS: SceneSnapshot[] = [
     backgroundIntensity: 0.88,
     carOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: true,
+    cyanHitMode: 'depthSim',
   },
   // 7 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
   {
@@ -192,7 +211,7 @@ export const PRESETS: SceneSnapshot[] = [
     backgroundIntensity: 0.85,
     carOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
-    sphereHitProjectOnCar: true,
+    cyanHitMode: 'depthSim',
   },
   // 8 — 평면 위 샘플만 (range / depth)
   {
@@ -212,6 +231,6 @@ export const PRESETS: SceneSnapshot[] = [
     backgroundIntensity: 0.82,
     carOpacity: 1,
     projectMarkersOnNearPlaneOnly: true,
-    sphereHitProjectOnCar: true,
+    cyanHitMode: 'depthSim',
   },
 ];

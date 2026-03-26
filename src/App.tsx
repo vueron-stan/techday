@@ -17,6 +17,8 @@ import {
 import {
   INITIAL_SCENE,
   PRESETS,
+  type CarDriveConfig,
+  type CyanHitMode,
   type SceneSnapshot,
   type Vec3,
 } from './scenePresets';
@@ -99,6 +101,53 @@ function sampleFrustumRays(
   return out;
 }
 
+/**
+ * 꼭짓점 원점, 전방 −Z. `sampleFrustumRays` 와 동일 (θ,φ) 모서리 4광선과 평면 z=−height 교선으로 밑면.
+ */
+function buildLidarPyramidGeometry(
+  height: number,
+  azimuthSpanDeg: number,
+  polarSpanDeg: number,
+): THREE.BufferGeometry {
+  const h = Math.max(1e-4, height);
+  const thetaMin = -THREE.MathUtils.degToRad(azimuthSpanDeg) / 2;
+  const thetaMax = THREE.MathUtils.degToRad(azimuthSpanDeg) / 2;
+  const phiMin = -THREE.MathUtils.degToRad(polarSpanDeg) / 2;
+  const phiMax = THREE.MathUtils.degToRad(polarSpanDeg) / 2;
+
+  const corner = (theta: number, phi: number): [number, number, number] => {
+    const dirX = Math.sin(theta) * Math.cos(phi);
+    const dirY = Math.sin(phi);
+    const dirZ = -Math.cos(theta) * Math.cos(phi);
+    const dz = dirZ < -1e-8 ? dirZ : -1e-8;
+    const t = -h / dz;
+    return [t * dirX, t * dirY, t * dirZ];
+  };
+
+  const c1 = corner(thetaMin, phiMin);
+  const c2 = corner(thetaMax, phiMin);
+  const c3 = corner(thetaMax, phiMax);
+  const c4 = corner(thetaMin, phiMax);
+
+  const positions = new Float32Array([
+    0,
+    0,
+    0,
+    ...c1,
+    ...c2,
+    ...c3,
+    ...c4,
+  ]);
+  const indices = [
+    0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1, 1, 3, 2, 1, 4, 3,
+  ];
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+  return geom;
+}
+
 interface FrustumData {
   lines: THREE.Vector3[];
   /** near 평면 해석 교점 (레이캐스트 폴백·표시용) */
@@ -177,12 +226,6 @@ const frustumFovX = THREE.MathUtils.radToDeg(
   2 * Math.atan((16 / 9) * Math.tan(THREE.MathUtils.degToRad(frustumFovY / 2))),
 );
 
-/** ConeGeometry: 꼭짓점 +Y → 라이다 전방 −Z 축(밑면이 −Z로 열림). `position.z = -h/2`로 꼭짓점을 원점에 둠 */
-const LIDAR_PYRAMID_QUAT = new THREE.Quaternion().setFromUnitVectors(
-  new THREE.Vector3(0, 1, 0),
-  new THREE.Vector3(0, 0, 1),
-);
-
 /** `SceneSnapshot` 필드 + 런타임 `carRaycastTarget`(GLB 마운트) */
 interface FrustumVisualizerProps {
   sphereOpacity: number;
@@ -200,8 +243,8 @@ interface FrustumVisualizerProps {
   carRaycastTarget: THREE.Object3D | null;
   /** true: 노란 투영점을 near 평면 식으로만 둠. false + 차 있으면 `Raycaster`로 표면 교차 */
   projectMarkersOnNearPlaneOnly: boolean;
-  /** true: 시안 구면 교점을 차 표면(레이캐스트)에 둠. false: 외접 구면 해석 위치 */
-  sphereHitProjectOnCar: boolean;
+  /** 시안: 구면만 / GPU 깊이(차·바닥) 시뮬 */
+  cyanHitMode: CyanHitMode;
   /** 바닥(street) 투명도 — 0이면 깊이/레이 통과 */
   streetOpacity: number;
   /** GPU 깊이 히트 위치 노이즈 (world 단위, 0–0.3) */
@@ -210,6 +253,10 @@ interface FrustumVisualizerProps {
   lidarPyramidHeight: number;
   /** GPU 깊이/포인트 `execute` 갱신 주파수 (Hz) */
   lidarSampleRateHz: number;
+  /** 라이다 시뮬 최대 거리(far) */
+  lidarMaxRange: number;
+  /** 차량 주행 중 등 — Hz 스로틀 없이 매 프레임 깊이·포인트 갱신 */
+  forceLidarEveryFrame: boolean;
 }
 
 const SENSOR_MATRIX = new THREE.Matrix4();
@@ -236,11 +283,13 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   nearPointSize,
   carRaycastTarget,
   projectMarkersOnNearPlaneOnly,
-  sphereHitProjectOnCar,
+  cyanHitMode,
   streetOpacity,
   hitNoiseLevel,
   lidarPyramidHeight,
   lidarSampleRateHz,
+  lidarMaxRange,
+  forceLidarEveryFrame,
 }) => {
   const { gl, scene } = useThree();
   const guideRootRef = useRef<THREE.Group>(null);
@@ -252,11 +301,27 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     lastGpuSampleTimeRef.current = -Infinity;
   }, [lidarSampleRateHz]);
 
+  useLayoutEffect(() => {
+    if (forceLidarEveryFrame) lastGpuSampleTimeRef.current = -Infinity;
+  }, [forceLidarEveryFrame]);
+
+  const lidarPyramidGeometry = useMemo(
+    () => buildLidarPyramidGeometry(lidarPyramidHeight, azimuthSpanDeg, polarSpanDeg),
+    [lidarPyramidHeight, azimuthSpanDeg, polarSpanDeg],
+  );
+  useEffect(
+    () => () => {
+      lidarPyramidGeometry.dispose();
+    },
+    [lidarPyramidGeometry],
+  );
+
   const depthSceneActive =
     streetOpacity > 0 || carRaycastTarget != null;
+  const cyanDepthSim = cyanHitMode === 'depthSim';
   const runGpuHits =
     depthSceneActive &&
-    (!projectMarkersOnNearPlaneOnly || sphereHitProjectOnCar);
+    (!projectMarkersOnNearPlaneOnly || cyanDepthSim);
 
   const GPU_PASS_RECREATE_DEBOUNCE_MS = 90;
   const debouncedAzimuthSpanDeg = useDebouncedValue(
@@ -278,7 +343,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
 
   const { lines, nearPlanePoints, sphereHitPoints, sphereRadius, planeWidth, planeHeight, samples } =
     useMemo<FrustumData>(() => {
-      const far = 10;
+      const far = Math.max(1, lidarMaxRange);
       const halfX = THREE.MathUtils.degToRad(frustumFovX / 2);
       const halfY = THREE.MathUtils.degToRad(frustumFovY / 2);
       const farX = far * Math.tan(halfX);
@@ -319,7 +384,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
         planeHeight: planeH,
         samples: raySamples,
       };
-    }, [near, azimuthSpanDeg, polarSpanDeg, azimuthDivisions, polarDivisions]);
+    }, [near, azimuthSpanDeg, polarSpanDeg, azimuthDivisions, polarDivisions, lidarMaxRange]);
 
   const projectionMarkers = useMemo(() => {
     const useAnalytical = projectMarkersOnNearPlaneOnly || !carRaycastTarget;
@@ -352,7 +417,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   ]);
 
   const sphereHitDisplayPositions = useMemo(() => {
-    if (!sphereHitProjectOnCar || !carRaycastTarget) {
+    if (cyanHitMode === 'sphereOnly' || !carRaycastTarget) {
       return new Float32Array(sphereHitPoints.flatMap((v) => [v.x, v.y, v.z]));
     }
     if (runGpuHits) {
@@ -373,7 +438,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
 
     return new Float32Array(pts.flatMap((v) => [v.x, v.y, v.z]));
   }, [
-    sphereHitProjectOnCar,
+    cyanHitMode,
     carRaycastTarget,
     samples,
     sphereHitPoints,
@@ -420,10 +485,10 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     gpuPass.setMaxRange(sphereRadius);
     gpuPass.setMarkerScales(sphereHitSize, nearPointSize);
     gpuPass.setMarkerOpacities(sphereHitOpacity, 1);
-    gpuPass.setCyanUsesHitOnly(sphereHitProjectOnCar);
+    gpuPass.setCyanUsesHitOnly(cyanDepthSim);
     gpuPass.setHitNoiseLevel(hitNoiseLevel);
     gpuPass.setMeshVisibility(
-      sphereHitProjectOnCar,
+      cyanDepthSim,
       !projectMarkersOnNearPlaneOnly,
     );
   }, [
@@ -432,7 +497,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     sphereHitSize,
     nearPointSize,
     sphereHitOpacity,
-    sphereHitProjectOnCar,
+    cyanDepthSim,
     projectMarkersOnNearPlaneOnly,
     hitNoiseLevel,
   ]);
@@ -442,10 +507,12 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     if (!pass) return;
     const renderer = gl as unknown as THREE.WebGPURenderer;
     if (!renderer.compute) return;
-    const hz = THREE.MathUtils.clamp(lidarSampleRateHz, 0.1, 20);
-    const interval = 1 / hz;
     const t = state.clock.elapsedTime;
-    if (t - lastGpuSampleTimeRef.current < interval) return;
+    if (!forceLidarEveryFrame) {
+      const hz = THREE.MathUtils.clamp(lidarSampleRateHz, 0.1, 20);
+      const interval = 1 / hz;
+      if (t - lastGpuSampleTimeRef.current < interval) return;
+    }
     lastGpuSampleTimeRef.current = t;
     pass.execute(renderer, scene, SENSOR_MATRIX);
   }, -1);
@@ -453,7 +520,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   const linePositions = new Float32Array(lines.flatMap((v) => [v.x, v.y, v.z]));
 
   const showCpuCyan =
-    !runGpuHits || !sphereHitProjectOnCar || sphereHitOpacity <= 0.001;
+    !runGpuHits || cyanHitMode === 'sphereOnly' || sphereHitOpacity <= 0.001;
   const showCpuYellow = !runGpuHits || projectMarkersOnNearPlaneOnly;
 
   useLayoutEffect(() => {
@@ -482,6 +549,9 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
     sphereHitDisplayPositions,
     projectionMarkers,
     lidarPyramidHeight,
+    azimuthSpanDeg,
+    polarSpanDeg,
+    lidarPyramidGeometry,
   ]);
 
   return (
@@ -543,27 +613,13 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
           />
         ) : null}
 
-        <mesh
-          position={[0, 0, -lidarPyramidHeight / 2]}
-          quaternion={LIDAR_PYRAMID_QUAT}
-        >
-          <coneGeometry
-            args={[
-              lidarPyramidHeight * 0.52,
-              lidarPyramidHeight,
-              4,
-              1,
-              false,
-              Math.PI / 4,
-            ]}
-          />
+        <mesh geometry={lidarPyramidGeometry}>
           <meshStandardMaterial
             color="#cc2222"
             transparent
             opacity={0.3}
             depthWrite={false}
             side={THREE.DoubleSide}
-            // wireframe
           />
         </mesh>
       </group>
@@ -731,17 +787,21 @@ function applyGltfRootSurfaceState(
 
 function Car({
   distance,
+  worldPosition,
   opacity,
   depthWrite,
   onSceneMount,
 }: {
   distance: number;
+  /** 없으면 기본 `[-3, -2.1, -distance * 0.7]` */
+  worldPosition?: Vec3;
   opacity: number;
   depthWrite: boolean;
   onSceneMount?: (root: THREE.Object3D | null) => void;
 }) {
-  const gltf = useLoader(GLTFLoader, '/car.glb');
-  const multiplier = distance * 0.3;
+  const gltf = useLoader(GLTFLoader, '/car3.glb');
+  const multiplier = distance*0.8;
+  const pos = worldPosition ?? ([-3, -2.1, -distance * 0.7] as Vec3);
 
   useLayoutEffect(() => {
     applyGltfRootSurfaceState(gltf.scene, opacity, depthWrite);
@@ -756,7 +816,7 @@ function Car({
     <primitive
       object={gltf.scene}
       scale={[multiplier, multiplier, multiplier]}
-      position={[-3, -2.1, -distance * 0.7]}
+      position={[pos[0], pos[1], pos[2]]}
       rotation={[0, 0, 0]}
     />
   );
@@ -827,10 +887,7 @@ export default function App() {
   const [projectMarkersOnNearPlaneOnly, setProjectMarkersOnNearPlaneOnly] = useState(
     INITIAL_SCENE.projectMarkersOnNearPlaneOnly,
   );
-  /** 체크 시: 시안 점을 차량 표면 레이캐스트. 끄면 외접 구면 해석 위치. */
-  const [sphereHitProjectOnCar, setSphereHitProjectOnCar] = useState(
-    INITIAL_SCENE.sphereHitProjectOnCar,
-  );
+  const [cyanHitMode, setCyanHitMode] = useState<CyanHitMode>(INITIAL_SCENE.cyanHitMode);
   const [carRaycastTarget, setCarRaycastTarget] = useState<THREE.Object3D | null>(null);
   const [carOpacity, setCarOpacity] = useState(INITIAL_SCENE.carOpacity);
   const [streetOpacity, setStreetOpacity] = useState(INITIAL_SCENE.streetOpacity);
@@ -841,6 +898,7 @@ export default function App() {
   const [lidarSampleRateHz, setLidarSampleRateHz] = useState(
     INITIAL_SCENE.lidarSampleRateHz,
   );
+  const [lidarMaxRange, setLidarMaxRange] = useState(INITIAL_SCENE.lidarMaxRange);
   /** Camera projection 옵션(슬라이더) 패널 — 기본 접힘 */
   const [projectionOptionsOpen, setProjectionOptionsOpen] = useState(false);
 
@@ -849,10 +907,15 @@ export default function App() {
   }, []);
 
   const animFrameRef = useRef<number | null>(null);
+  const carDriveRafRef = useRef<number | null>(null);
+  /** `null`이면 Car z는 `carZSlider`. `carDrive` 중에는 이 값으로 보간 */
+  const [carWorldPosition, setCarWorldPosition] = useState<Vec3 | null>(null);
+  const [carZSlider, setCarZSlider] = useState(() => -INITIAL_SCENE.near * 0.7);
 
   useEffect(() => {
     return () => {
       if (animFrameRef.current != null) cancelAnimationFrame(animFrameRef.current);
+      if (carDriveRafRef.current != null) cancelAnimationFrame(carDriveRafRef.current);
     };
   }, []);
 
@@ -876,8 +939,9 @@ export default function App() {
     hitNoiseLevel,
     lidarPyramidHeight,
     lidarSampleRateHz,
+    lidarMaxRange,
     projectMarkersOnNearPlaneOnly,
-    sphereHitProjectOnCar,
+    cyanHitMode,
   });
 
   const applySnapshot = (s: SceneSnapshot) => {
@@ -900,15 +964,58 @@ export default function App() {
     setHitNoiseLevel(s.hitNoiseLevel);
     setLidarPyramidHeight(s.lidarPyramidHeight);
     setLidarSampleRateHz(s.lidarSampleRateHz);
+    setLidarMaxRange(s.lidarMaxRange);
     setProjectMarkersOnNearPlaneOnly(s.projectMarkersOnNearPlaneOnly);
-    setSphereHitProjectOnCar(s.sphereHitProjectOnCar);
+    setCyanHitMode(s.cyanHitMode);
   };
+
+  const cancelCarDrive = useCallback(() => {
+    if (carDriveRafRef.current != null) {
+      cancelAnimationFrame(carDriveRafRef.current);
+      carDriveRafRef.current = null;
+    }
+    setCarWorldPosition(null);
+  }, []);
+
+  const startCarDrive = useCallback(
+    (cfg: CarDriveConfig) => {
+      cancelCarDrive();
+      const [sx, sy, sz] = cfg.start;
+      const [ex, ey, ez] = cfg.end;
+      const dur = Math.max(1, cfg.durationMs);
+      const t0 = performance.now();
+      setCarWorldPosition([sx, sy, sz]);
+      setCarZSlider(sz);
+      const driveTick = (now: number) => {
+        const u = Math.min(1, (now - t0) / dur);
+        const k = easeInOutCubic(u);
+        const x = lerp(sx, ex, k);
+        const y = lerp(sy, ey, k);
+        const z = lerp(sz, ez, k);
+        setCarWorldPosition([x, y, z]);
+        setCarZSlider(z);
+        if (u < 1) carDriveRafRef.current = requestAnimationFrame(driveTick);
+        else {
+          carDriveRafRef.current = null;
+          setCarWorldPosition(null);
+          setCarZSlider(ez);
+        }
+      };
+      carDriveRafRef.current = requestAnimationFrame(driveTick);
+    },
+    [cancelCarDrive],
+  );
 
   const runPreset = (presetIndex: number) => {
     const goal = PRESETS[presetIndex];
     if (!goal) return;
     if (animFrameRef.current != null) cancelAnimationFrame(animFrameRef.current);
     const from = snapshot();
+    if (goal.carDrive) {
+      startCarDrive(goal.carDrive);
+    } else {
+      cancelCarDrive();
+    }
     let tStart = -1;
 
     const tick = (now: number) => {
@@ -935,8 +1042,9 @@ export default function App() {
         hitNoiseLevel: lerp(from.hitNoiseLevel, goal.hitNoiseLevel, k),
         lidarPyramidHeight: lerp(from.lidarPyramidHeight, goal.lidarPyramidHeight, k),
         lidarSampleRateHz: lerp(from.lidarSampleRateHz, goal.lidarSampleRateHz, k),
+        lidarMaxRange: lerp(from.lidarMaxRange, goal.lidarMaxRange, k),
         projectMarkersOnNearPlaneOnly: goal.projectMarkersOnNearPlaneOnly,
-        sphereHitProjectOnCar: goal.sphereHitProjectOnCar,
+        cyanHitMode: goal.cyanHitMode,
       });
       if (rawT < 1) animFrameRef.current = requestAnimationFrame(tick);
       else animFrameRef.current = null;
@@ -973,6 +1081,7 @@ export default function App() {
         <MainCameraEnableFrustumGuideLayer />
         <Car
           distance={near}
+          worldPosition={carWorldPosition ?? ([-3, -2.1, carZSlider] as Vec3)}
           opacity={carOpacity}
           depthWrite={true}
           onSceneMount={onCarSceneMount}
@@ -992,11 +1101,13 @@ export default function App() {
           nearPointSize={nearPointSize}
           carRaycastTarget={carOpacity > 0 ? carRaycastTarget : null}
           projectMarkersOnNearPlaneOnly={projectMarkersOnNearPlaneOnly}
-          sphereHitProjectOnCar={sphereHitProjectOnCar}
+          cyanHitMode={cyanHitMode}
           streetOpacity={streetOpacity}
           hitNoiseLevel={hitNoiseLevel}
           lidarPyramidHeight={lidarPyramidHeight}
           lidarSampleRateHz={lidarSampleRateHz}
+          lidarMaxRange={lidarMaxRange}
+          forceLidarEveryFrame={carWorldPosition !== null}
         />
         <ManagedOrbitControls
           onRelease={(pos, tgt) => {
@@ -1155,6 +1266,15 @@ export default function App() {
               onChange={setLidarSampleRateHz}
             />
             <SliderRow
+              label="라이다 최대 거리 (far / range)"
+              value={lidarMaxRange}
+              min={5}
+              max={100}
+              step={1}
+              unit=""
+              onChange={setLidarMaxRange}
+            />
+            <SliderRow
               label="뷰 평면(near 면) 투명도"
               value={planeOpacity}
               min={0}
@@ -1171,6 +1291,18 @@ export default function App() {
               step={0.02}
               unit=""
               onChange={setCarOpacity}
+            />
+            <SliderRow
+              label="차량 월드 Z (전후)"
+              value={carZSlider}
+              min={-90}
+              max={10}
+              step={0.5}
+              unit=""
+              onChange={(z) => {
+                cancelCarDrive();
+                setCarZSlider(z);
+              }}
             />
             <SliderRow
               label="바닥(street) 투명도 (0 = 레이·깊이 통과)"
@@ -1206,31 +1338,73 @@ export default function App() {
                 </span>
               </span>
             </label>
-            <label
+            <fieldset
               style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
-                marginBottom: 12,
-                fontSize: 13,
-                color: '#ccc',
-                cursor: 'pointer',
+                border: 'none',
+                padding: 0,
+                margin: '0 0 12px',
               }}
             >
-              <input
-                type="checkbox"
-                checked={sphereHitProjectOnCar}
-                onChange={(e) => setSphereHitProjectOnCar(e.target.checked)}
-                style={{ marginTop: 3 }}
-              />
-              <span>
-                시안(구면 교점)을 <strong style={{ color: '#fd9' }}>차량 표면(레이캐스트)</strong>에 둠
-                <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
-                  끄면 <strong style={{ color: '#9df' }}>외접 구면</strong>과의 해석적 교차(차 숨김·미적중 시에도
-                  구면 위치로 폴백).
+              <legend
+                style={{
+                  fontSize: 13,
+                  color: '#ccc',
+                  marginBottom: 8,
+                  padding: 0,
+                }}
+              >
+                시안(구면 교점)
+              </legend>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  marginBottom: 8,
+                  fontSize: 13,
+                  color: '#ccc',
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="cyanHitMode"
+                  checked={cyanHitMode === 'sphereOnly'}
+                  onChange={() => setCyanHitMode('sphereOnly')}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <strong style={{ color: '#9df' }}>구면에만</strong> 투영
+                  <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
+                    외접 구면과의 해석적 교차(차·바닥과 무관).
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  fontSize: 13,
+                  color: '#ccc',
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="cyanHitMode"
+                  checked={cyanHitMode === 'depthSim'}
+                  onChange={() => setCyanHitMode('depthSim')}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  <strong style={{ color: '#fd9' }}>차량, 바닥</strong>에 시뮬레이션
+                  <span style={{ color: '#888', fontSize: 11, display: 'block', marginTop: 4 }}>
+                    GPU 깊이 맵으로 메시 표면에 포인트(차·street 가시 시).
+                  </span>
+                </span>
+              </label>
+            </fieldset>
             <SliderRow
               label="HDR 배경 강도 (backgroundIntensity)"
               value={backgroundIntensity}
