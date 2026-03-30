@@ -40,8 +40,8 @@ import {
 const HDR_URL =
   'https://viewer.vueron.com/public/model/c8a3cfa6-151f-4d33-bd4c-60795efa271d.hdr';
 
-/** Vite `base` — dev `/`, production build `/techday/` */
-const PUBLIC_BASE = import.meta.env.BASE_URL;
+// if dev, '/techday/'
+const PUBLIC_BASE = import.meta.env.DEV ? '/techday/' : '/';
 
 /** GLB 루트 스케일 — near와 무관하게 고정 */
 const CAR_UNIFORM_SCALE = 4.6;
