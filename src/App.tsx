@@ -40,6 +40,9 @@ import {
 const HDR_URL =
   'https://viewer.vueron.com/public/model/c8a3cfa6-151f-4d33-bd4c-60795efa271d.hdr';
 
+/** Vite `base` — dev `/`, production build `/techday/` */
+const PUBLIC_BASE = import.meta.env.BASE_URL;
+
 /** GLB 루트 스케일 — near와 무관하게 고정 */
 const CAR_UNIFORM_SCALE = 4.6;
 /** `carDrive` 없을 때 Z 슬라이더 (월드 Z, 앞쪽이 보통 음수) */
@@ -1144,7 +1147,7 @@ function Car({
   depthWrite: boolean;
   onSceneMount?: (root: THREE.Object3D | null) => void;
 }) {
-  const gltf = useLoader(GLTFLoader, '/car3.glb');
+  const gltf = useLoader(GLTFLoader, `${PUBLIC_BASE}car3.glb`);
 
   useLayoutEffect(() => {
     applyGltfRootSurfaceState(gltf.scene, opacity, depthWrite);
@@ -1179,7 +1182,7 @@ function Street({
   opacity: number;
   depthWrite: boolean;
 }) {
-  const gltf = useLoader(GLTFLoader, '/street.glb');
+  const gltf = useLoader(GLTFLoader, `${PUBLIC_BASE}street.glb`);
   const segmentRoots = useMemo(() => {
     const roots: THREE.Object3D[] = [gltf.scene];
     for (let i = 0; i < STREET_SEGMENT_OFFSETS.length - 1; i++) {
