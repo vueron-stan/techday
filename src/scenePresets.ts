@@ -309,45 +309,7 @@ export const PRESETS: SceneSnapshot[] = [
     cameraPosition: [71.73087018440263, 51.46278735376505, 67.16528371382438],
     orbitTarget: [34.77544266839697, 18.887427276305928, -9.584150060128502],
   },
-  // 9 — 평면에 센서 뷰 깊이 텍스처 (차·도로·구), 뒤쪽 씬 가시
-  {
-    near: 20,
-    azimuthSpanDeg: 120,
-    polarSpanDeg: 45,
-    azimuthDivisions: 32,
-    polarDivisions: 8,
-  
-    sphereOpacity: 0.30000000000000004,
-    lineOpacity: 0.5,
-    planeOpacity: 1,
-    drawDepthmap: true,
-  
-    sphereHitSize: 0,
-    sphereHitOpacity: 0,
-    nearPointSize: 0.05,
-    projectMarkersOnNearPlaneOnly: true,
-    cyanHitMode: 'depthSim',
-  
-    hitNoiseLevel: 0,
-    lidarPyramidHeight: 1.5,
-    lidarPyramidOpacity: 0.3,
-    lidarSampleRateHz: 10,
-    lidarMaxRange: 70,
-
-    carOpacity: 1,
-    streetOpacity: 1,
-    carPosition: [-3, -2.1, -15],
-
-    backgroundIntensity: 0.85,
-    cameraPosition: [-12.2, 5.4, 14.6],
-    orbitTarget: [0.5, -0.2, -4.2],
-    carDrive: {
-      start: [-3, -2.1, -15],
-      end: [-3, -2.1, -15],
-      durationMs: 1,
-    },
-  },
-  // 10
+  // 9
   {
     near: 20,
     azimuthSpanDeg: 120,
@@ -377,13 +339,46 @@ export const PRESETS: SceneSnapshot[] = [
     carPosition: [-3, -2.1, -15],
 
     backgroundIntensity: 0.85,
-    cameraPosition: [-12.2, 5.4, 14.6],
-    orbitTarget: [0.5, -0.2, -4.2],
+    cameraPosition: [-24.519954809454678, 8.040993992890627, 15.565633574227142],
+    orbitTarget: [-11.640461082404052, 2.324158948457695, -11.145907716453767],
     carDrive: {
       start: [-3, -2.1, -15],
       end: [-3, -2.1, -15],
       durationMs: 1,
     },
+  },
+  // 10 — 평면에 센서 뷰 깊이 텍스처 (차·도로·구), 뒤쪽 씬 가시
+  {
+    near: 20,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
+    azimuthDivisions: 32,
+    polarDivisions: 8,
+  
+    sphereOpacity: 0.30000000000000004,
+    lineOpacity: 0.5,
+    planeOpacity: 1,
+    drawDepthmap: true,
+  
+    sphereHitSize: 0,
+    sphereHitOpacity: 0,
+    nearPointSize: 0.05,
+    projectMarkersOnNearPlaneOnly: true,
+    cyanHitMode: 'depthSim',
+  
+    hitNoiseLevel: 0,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+  
+    carOpacity: 1,
+    streetOpacity: 1,
+    carPosition: [-3, -2.1, -15],
+  
+    backgroundIntensity: 0.85,
+    cameraPosition: [-24.519954809454678, 8.040993992890627, 15.565633574227142],
+    orbitTarget: [-11.640461082404052, 2.324158948457695, -11.145907716453767],
   },
   // 11
   {
@@ -418,7 +413,7 @@ export const PRESETS: SceneSnapshot[] = [
     cameraPosition: [-7.980114289990876, 2.7337580135645423, -5.3626566107906255],
     orbitTarget: [-5.71393544553194, 1.4710901314081943, -9.0723278153714],
   },
-  // 10 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
+  // 12 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
   {
     ...INITIAL_SCENE,
     near: 6,
@@ -454,7 +449,7 @@ export const PRESETS: SceneSnapshot[] = [
     carOpacity: 1,
     streetOpacity:1,
   },
-  // 11 — 평면 위 샘플만 (range / depth)
+  // 13 — 평면 위 샘플만 (range / depth)
   {
     near: 6,
     azimuthSpanDeg: 120,
