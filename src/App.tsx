@@ -121,20 +121,28 @@ interface FrustumRaySample {
   analyticalNear: THREE.Vector3 | null;
 }
 
-/** 격자 광선 샘플 (시야 클립은 near 직사각형과 동일) */
+/** z=−near 에서 수직 범위: y = near·tan(φ)/cos(θ) 이므로 반높이는 near·tan(polar/2)/cos(azimuth/2) */
+function nearPlaneHalfHeight(
+  near: number,
+  azimuthHalfRad: number,
+  polarHalfRad: number,
+): number {
+  const c = Math.max(1e-6, Math.cos(azimuthHalfRad));
+  return (near * Math.tan(polarHalfRad)) / c;
+}
+
+/** 격자 광선 샘플 (near 직사각형 클립: 가로는 azimuth, 세로는 구면 좌표식 극한 높이) */
 function sampleFrustumRays(
   near: number,
   azimuthSpanDeg: number,
   polarSpanDeg: number,
   azimuthDivisions: number,
   polarDivisions: number,
-  frustumFovXDeg: number,
-  frustumFovYDeg: number,
 ): FrustumRaySample[] {
-  const halfX = THREE.MathUtils.degToRad(frustumFovXDeg / 2);
-  const halfY = THREE.MathUtils.degToRad(frustumFovYDeg / 2);
+  const halfX = THREE.MathUtils.degToRad(azimuthSpanDeg / 2);
+  const halfY = THREE.MathUtils.degToRad(polarSpanDeg / 2);
   const planeW = 2 * near * Math.tan(halfX);
-  const planeH = 2 * near * Math.tan(halfY);
+  const planeH = 2 * nearPlaneHalfHeight(near, halfX, halfY);
   const clipX = (planeW / 2) * 1.01;
   const clipY = (planeH / 2) * 1.01;
 
@@ -288,11 +296,6 @@ function InstancedSphereMarkers({
   );
 }
 
-const frustumFovY = 45;
-const frustumFovX = THREE.MathUtils.radToDeg(
-  2 * Math.atan((16 / 9) * Math.tan(THREE.MathUtils.degToRad(frustumFovY / 2))),
-);
-
 function setOrbitControlsEnabled(controls: unknown, enabled: boolean) {
   const c = controls as { enabled?: boolean } | null | undefined;
   if (c && typeof c.enabled === 'boolean') c.enabled = enabled;
@@ -429,14 +432,14 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   const { lines, nearPlanePoints, sphereHitPoints, sphereRadius, planeWidth, planeHeight, samples } =
     useMemo<FrustumData>(() => {
       const far = Math.max(1, lidarMaxRange);
-      const halfX = THREE.MathUtils.degToRad(frustumFovX / 2);
-      const halfY = THREE.MathUtils.degToRad(frustumFovY / 2);
+      const halfX = THREE.MathUtils.degToRad(azimuthSpanDeg / 2);
+      const halfY = THREE.MathUtils.degToRad(polarSpanDeg / 2);
       const farX = far * Math.tan(halfX);
-      const farY = far * Math.tan(halfY);
+      const farY = nearPlaneHalfHeight(far, halfX, halfY);
       const radius = Math.sqrt(farX * farX + farY * farY + far * far);
 
       const planeW = 2 * near * Math.tan(halfX);
-      const planeH = 2 * near * Math.tan(halfY);
+      const planeH = 2 * nearPlaneHalfHeight(near, halfX, halfY);
 
       const raySamples = sampleFrustumRays(
         near,
@@ -444,8 +447,6 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
         polarSpanDeg,
         azimuthDivisions,
         polarDivisions,
-        frustumFovX,
-        frustumFovY,
       );
 
       const linePoints: THREE.Vector3[] = [];
@@ -701,7 +702,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
             />
           </lineSegments>
 
-          {/* <mesh position={[0, 0, -near]}>
+          <mesh position={[0, 0, -near]}>
             <planeGeometry args={[planeWidth, planeHeight]} />
             <meshStandardMaterial
               color="#ff4444"
@@ -711,7 +712,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
               depthWrite={false}
               depthTest
             />
-          </mesh> */}
+          </mesh>
 
           {showCpuCyan ? (
             <InstancedSphereMarkers
@@ -1106,6 +1107,8 @@ export default function App() {
   const [lidarMaxRange, setLidarMaxRange] = useState(INITIAL_SCENE.lidarMaxRange);
   /** Camera projection 옵션(슬라이더) 패널 — 기본 접힘 */
   const [projectionOptionsOpen, setProjectionOptionsOpen] = useState(false);
+  /** 우하단 프리셋 번호 — 마지막으로 누른 스텝(초기 1번) */
+  const [activePresetIndex, setActivePresetIndex] = useState(0);
 
   const viewportPoseGetterRef = useRef<(() => { camera: Vec3; target: Vec3 } | null) | null>(
     null,
@@ -1293,6 +1296,7 @@ export default function App() {
   const runPreset = (presetIndex: number) => {
     const goal = PRESETS[presetIndex];
     if (!goal) return;
+    setActivePresetIndex(presetIndex);
     if (animFrameRef.current != null) cancelAnimationFrame(animFrameRef.current);
     const from = snapshot();
     if (goal.carDrive) {
@@ -1614,15 +1618,15 @@ export default function App() {
                 onChange={setSphereOpacity}
               />
               {/* 뷰 평면 mesh 비활성 시 슬라이더도 함께 주석 — 복구 시 FrustumVisualizer near plane 주석 해제 */}
-              {/* <SliderRow
+              <SliderRow
                 label="뷰 평면(near 면) 투명도"
                 value={planeOpacity}
                 min={0}
                 max={1}
-                step={0.02}
+                step={0.01}
                 unit=""
                 onChange={setPlaneOpacity}
-              /> */}
+              />
             </PanelGroup>
             <PanelGroup title="교차점 · 시안">
               <SliderRow
@@ -1925,29 +1929,39 @@ export default function App() {
           zIndex: 20,
         }}
       >
-        {PRESETS.map((_, i) => (
-          <button
-            key={i}
-            type="button"
-            title={`발표 스텝 ${i + 1}/${PRESETS.length}`}
-            onClick={() => runPreset(i)}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: '50%',
-              border: '2px solid rgba(255,255,255,0.35)',
-              background: 'rgba(30,30,35,0.85)',
-              color: '#fff',
-              fontSize: 17,
-              fontWeight: 600,
-              cursor: 'pointer',
-              boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            {i + 1}
-          </button>
-        ))}
+        {PRESETS.map((_, i) => {
+          const selected = i === activePresetIndex;
+          return (
+            <button
+              key={i}
+              type="button"
+              aria-pressed={selected}
+              title={`발표 스텝 ${i + 1}/${PRESETS.length}`}
+              onClick={() => runPreset(i)}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                border: selected
+                  ? '2px solid rgba(120, 210, 255, 0.95)'
+                  : '2px solid rgba(255,255,255,0.35)',
+                background: selected
+                  ? 'rgba(55, 95, 140, 0.92)'
+                  : 'rgba(30,30,35,0.85)',
+                color: selected ? '#eaf8ff' : '#fff',
+                fontSize: 17,
+                fontWeight: selected ? 700 : 600,
+                cursor: 'pointer',
+                boxShadow: selected
+                  ? '0 0 0 2px rgba(100, 190, 255, 0.35), 0 4px 16px rgba(0,0,0,0.45)'
+                  : '0 4px 14px rgba(0,0,0,0.35)',
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              {i + 1}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

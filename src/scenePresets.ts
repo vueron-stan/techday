@@ -116,6 +116,12 @@ export const PRESETS: SceneSnapshot[] = [
     ...INITIAL_SCENE,
     cameraPosition: [7.475317110307151, -0.7281688354023441, 8.925257285566499],
     orbitTarget: [0.49166223312671203, 1.900876456763511, -1.459187110171474],
+    carDrive: {
+      start: [-3, -2.1, -(6 * 0.7) - 45],
+      end: [-3, -2.1, -(6 * 0.7) - 45],
+      durationMs: 1,
+    },
+    carOpacity:1,
     streetOpacity:1,
     lineOpacity:0,
     lidarPyramidOpacity:0,
@@ -125,7 +131,7 @@ export const PRESETS: SceneSnapshot[] = [
     ...INITIAL_SCENE,
     // lineOpacity: 0.42,
     // sphereOpacity: 0.02,
-    planeOpacity: 0.02,
+    
     sphereHitOpacity: 0.45,
     nearPointSize: 0,
     near: 6,
@@ -147,7 +153,7 @@ export const PRESETS: SceneSnapshot[] = [
     ...INITIAL_SCENE,
     // lineOpacity: 0.42,
     // sphereOpacity: 0.02,
-    planeOpacity: 0.02,
+    
     sphereHitOpacity: 0.45,
     nearPointSize: 0,
     lineOpacity:0,
@@ -258,7 +264,38 @@ export const PRESETS: SceneSnapshot[] = [
     cameraPosition: [46.51370163784948, 49.298951967688836, 87.8722732335296],
     orbitTarget: [11.60515558744173, 12.321567765229588, -5.555514980666803],
   },
-  // 7 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
+  // 8 — 평면투영
+  {
+    near: 50,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
+    azimuthDivisions: 32,
+    polarDivisions: 8,
+  
+    sphereOpacity: 0.30000000000000004,
+    lineOpacity: 0.94,
+    planeOpacity: 1,
+  
+    sphereHitSize: 0,
+    sphereHitOpacity: 0,
+    nearPointSize: 0.3,
+    projectMarkersOnNearPlaneOnly: true,
+    cyanHitMode: 'sphereOnly',
+  
+    hitNoiseLevel: 0.03,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+  
+    carOpacity: 0,
+    streetOpacity: 0,
+  
+    backgroundIntensity: 0.05,
+    cameraPosition: [71.73087018440263, 51.46278735376505, 67.16528371382438],
+    orbitTarget: [34.77544266839697, 18.887427276305928, -9.584150060128502],
+  },
+  // 9 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
   {
     ...INITIAL_SCENE,
     near: 6,
@@ -293,7 +330,7 @@ export const PRESETS: SceneSnapshot[] = [
     carOpacity: 1,
     streetOpacity:1,
   },
-  // 8 — 평면 위 샘플만 (range / depth)
+  // 10 — 평면 위 샘플만 (range / depth)
   {
     ...INITIAL_SCENE,
     near: 6,
