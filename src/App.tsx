@@ -36,6 +36,71 @@ function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
   return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 }
 
+/** 프리셋/코드에 붙여넣기용 `[x, y, z]` 문자열 */
+function vec3TupleClipboardText(v: Vec3): string {
+  return `[${v[0]}, ${v[1]}, ${v[2]}]`;
+}
+
+/** `INITIAL_SCENE` / `PRESETS` 에 붙여넣기 — `SceneSnapshot` 필드 순서는 scenePresets.ts 와 동일 */
+function tsNumberLiteral(n: number): string {
+  if (
+    Number.isFinite(n) &&
+    Math.round(n) === n &&
+    Math.abs(n) <= Number.MAX_SAFE_INTEGER
+  ) {
+    return String(Math.round(n));
+  }
+  return String(n);
+}
+
+function formatSceneSnapshotForPresetPaste(s: SceneSnapshot): string {
+  const cam = vec3TupleClipboardText(s.cameraPosition);
+  const tgt = vec3TupleClipboardText(s.orbitTarget);
+  const lines = [
+    '{',
+    `  near: ${tsNumberLiteral(s.near)},`,
+    `  azimuthSpanDeg: ${tsNumberLiteral(s.azimuthSpanDeg)},`,
+    `  polarSpanDeg: ${tsNumberLiteral(s.polarSpanDeg)},`,
+    `  azimuthDivisions: ${tsNumberLiteral(s.azimuthDivisions)},`,
+    `  polarDivisions: ${tsNumberLiteral(s.polarDivisions)},`,
+    '',
+    `  sphereOpacity: ${tsNumberLiteral(s.sphereOpacity)},`,
+    `  lineOpacity: ${tsNumberLiteral(s.lineOpacity)},`,
+    `  planeOpacity: ${tsNumberLiteral(s.planeOpacity)},`,
+    '',
+    `  sphereHitSize: ${tsNumberLiteral(s.sphereHitSize)},`,
+    `  sphereHitOpacity: ${tsNumberLiteral(s.sphereHitOpacity)},`,
+    `  nearPointSize: ${tsNumberLiteral(s.nearPointSize)},`,
+    `  projectMarkersOnNearPlaneOnly: ${s.projectMarkersOnNearPlaneOnly},`,
+    `  cyanHitMode: '${s.cyanHitMode}',`,
+    '',
+    `  hitNoiseLevel: ${tsNumberLiteral(s.hitNoiseLevel)},`,
+    `  lidarPyramidHeight: ${tsNumberLiteral(s.lidarPyramidHeight)},`,
+    `  lidarPyramidOpacity: ${tsNumberLiteral(s.lidarPyramidOpacity)},`,
+    `  lidarSampleRateHz: ${tsNumberLiteral(s.lidarSampleRateHz)},`,
+    `  lidarMaxRange: ${tsNumberLiteral(s.lidarMaxRange)},`,
+    '',
+    `  carOpacity: ${tsNumberLiteral(s.carOpacity)},`,
+    `  streetOpacity: ${tsNumberLiteral(s.streetOpacity)},`,
+    '',
+    `  backgroundIntensity: ${tsNumberLiteral(s.backgroundIntensity)},`,
+    `  cameraPosition: ${cam},`,
+    `  orbitTarget: ${tgt},`,
+  ];
+  if (s.carDrive) {
+    const { start, end, durationMs } = s.carDrive;
+    lines.push(
+      '  carDrive: {',
+      `    start: ${vec3TupleClipboardText(start)},`,
+      `    end: ${vec3TupleClipboardText(end)},`,
+      `    durationMs: ${tsNumberLiteral(durationMs)},`,
+      '  },',
+    );
+  }
+  lines.push('}');
+  return lines.join('\n');
+}
+
 function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
@@ -256,6 +321,8 @@ interface FrustumVisualizerProps {
   hitNoiseLevel: number;
   /** 라이다 원점 표시: 전방 −Z로 선 사각 피라미드 높이(꼭짓점~밑면) */
   lidarPyramidHeight: number;
+  /** 라이다 원점 피라미드 메시 투명도 */
+  lidarPyramidOpacity: number;
   /** GPU 깊이/포인트 `execute` 갱신 주파수 (Hz) */
   lidarSampleRateHz: number;
   /** 라이다 시뮬 최대 거리(far) */
@@ -289,6 +356,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
   cyanHitMode,
   hitNoiseLevel,
   lidarPyramidHeight,
+  lidarPyramidOpacity,
   lidarSampleRateHz,
   lidarMaxRange,
   carDriveActive,
@@ -679,7 +747,7 @@ const FrustumVisualizer: React.FC<FrustumVisualizerProps> = ({
             <meshStandardMaterial
               color={lidarPivotSelected ? '#ff4444' : '#cc2222'}
               transparent
-              opacity={0.35}
+              opacity={lidarPyramidOpacity}
               depthWrite={false}
               side={THREE.DoubleSide}
             />
@@ -741,6 +809,7 @@ function Background({ intensity }: { intensity: number }) {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.needsUpdate = true;
       scene.background = texture;
+      scene.backgroundRotation = new THREE.Euler(0, Math.PI, 0);
       scene.backgroundIntensity = intensityRef.current;
       scene.environment = texture;
       scene.environmentIntensity = intensityRef.current;
@@ -769,6 +838,30 @@ function ManagedOrbitControls({ onRelease }: { onRelease: (pos: Vec3, tgt: Vec3)
       }}
     />
   );
+}
+
+/** 패널에서 버튼으로 스냅샷할 때 사용 — R3F 카메라·OrbitControls.target 을 읽음 */
+function ViewportPoseGetterBridge({
+  getterRef,
+}: {
+  getterRef: React.MutableRefObject<(() => { camera: Vec3; target: Vec3 } | null) | null>;
+}) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls);
+  useLayoutEffect(() => {
+    getterRef.current = () => {
+      const oc = controls as unknown as { target?: THREE.Vector3 } | null;
+      if (!oc?.target) return null;
+      return {
+        camera: [camera.position.x, camera.position.y, camera.position.z],
+        target: [oc.target.x, oc.target.y, oc.target.z],
+      };
+    };
+    return () => {
+      getterRef.current = null;
+    };
+  }, [camera, controls, getterRef]);
+  return null;
 }
 
 function SliderRow({
@@ -1004,12 +1097,92 @@ export default function App() {
   const [lidarPyramidHeight, setLidarPyramidHeight] = useState(
     INITIAL_SCENE.lidarPyramidHeight,
   );
+  const [lidarPyramidOpacity, setLidarPyramidOpacity] = useState(
+    INITIAL_SCENE.lidarPyramidOpacity,
+  );
   const [lidarSampleRateHz, setLidarSampleRateHz] = useState(
     INITIAL_SCENE.lidarSampleRateHz,
   );
   const [lidarMaxRange, setLidarMaxRange] = useState(INITIAL_SCENE.lidarMaxRange);
   /** Camera projection 옵션(슬라이더) 패널 — 기본 접힘 */
   const [projectionOptionsOpen, setProjectionOptionsOpen] = useState(false);
+
+  const viewportPoseGetterRef = useRef<(() => { camera: Vec3; target: Vec3 } | null) | null>(
+    null,
+  );
+  const [panelCameraReadout, setPanelCameraReadout] = useState<Vec3>(() => [
+    ...INITIAL_SCENE.cameraPosition,
+  ]);
+  const [panelTargetReadout, setPanelTargetReadout] = useState<Vec3>(() => [
+    ...INITIAL_SCENE.orbitTarget,
+  ]);
+
+  const refreshViewportPoseReadout = useCallback(() => {
+    const snap = viewportPoseGetterRef.current?.();
+    if (!snap) return;
+    setPanelCameraReadout([...snap.camera]);
+    setPanelTargetReadout([...snap.target]);
+  }, []);
+
+  const copyCurrentScenePresetSnippet = useCallback(() => {
+    const pose = viewportPoseGetterRef.current?.();
+    const cam = pose?.camera ?? ([...cameraPosition] as Vec3);
+    const tgt = pose?.target ?? ([...orbitTarget] as Vec3);
+    const s: SceneSnapshot = {
+      near,
+      azimuthSpanDeg,
+      polarSpanDeg,
+      azimuthDivisions,
+      polarDivisions,
+      sphereOpacity,
+      lineOpacity,
+      planeOpacity,
+      sphereHitSize,
+      sphereHitOpacity,
+      nearPointSize,
+      projectMarkersOnNearPlaneOnly,
+      cyanHitMode,
+      hitNoiseLevel,
+      lidarPyramidHeight,
+      lidarPyramidOpacity,
+      lidarSampleRateHz,
+      lidarMaxRange,
+      carOpacity,
+      streetOpacity,
+      backgroundIntensity,
+      cameraPosition: [...cam],
+      orbitTarget: [...tgt],
+    };
+    setCameraPosition([...cam]);
+    setOrbitTarget([...tgt]);
+    setPanelCameraReadout([...cam]);
+    setPanelTargetReadout([...tgt]);
+    void navigator.clipboard.writeText(formatSceneSnapshotForPresetPaste(s));
+  }, [
+    near,
+    azimuthSpanDeg,
+    polarSpanDeg,
+    azimuthDivisions,
+    polarDivisions,
+    sphereOpacity,
+    lineOpacity,
+    planeOpacity,
+    sphereHitSize,
+    sphereHitOpacity,
+    nearPointSize,
+    projectMarkersOnNearPlaneOnly,
+    cyanHitMode,
+    hitNoiseLevel,
+    lidarPyramidHeight,
+    lidarPyramidOpacity,
+    lidarSampleRateHz,
+    lidarMaxRange,
+    carOpacity,
+    streetOpacity,
+    backgroundIntensity,
+    cameraPosition,
+    orbitTarget,
+  ]);
 
   const onCarSceneMount = useCallback((root: THREE.Object3D | null) => {
     setCarRaycastTarget(root);
@@ -1047,6 +1220,7 @@ export default function App() {
     streetOpacity,
     hitNoiseLevel,
     lidarPyramidHeight,
+    lidarPyramidOpacity,
     lidarSampleRateHz,
     lidarMaxRange,
     projectMarkersOnNearPlaneOnly,
@@ -1072,6 +1246,7 @@ export default function App() {
     setStreetOpacity(s.streetOpacity);
     setHitNoiseLevel(s.hitNoiseLevel);
     setLidarPyramidHeight(s.lidarPyramidHeight);
+    setLidarPyramidOpacity(s.lidarPyramidOpacity);
     setLidarSampleRateHz(s.lidarSampleRateHz);
     setLidarMaxRange(s.lidarMaxRange);
     setProjectMarkersOnNearPlaneOnly(s.projectMarkersOnNearPlaneOnly);
@@ -1150,6 +1325,7 @@ export default function App() {
         streetOpacity: lerp(from.streetOpacity, goal.streetOpacity, k),
         hitNoiseLevel: lerp(from.hitNoiseLevel, goal.hitNoiseLevel, k),
         lidarPyramidHeight: lerp(from.lidarPyramidHeight, goal.lidarPyramidHeight, k),
+        lidarPyramidOpacity: lerp(from.lidarPyramidOpacity, goal.lidarPyramidOpacity, k),
         lidarSampleRateHz: lerp(from.lidarSampleRateHz, goal.lidarSampleRateHz, k),
         lidarMaxRange: lerp(from.lidarMaxRange, goal.lidarMaxRange, k),
         projectMarkersOnNearPlaneOnly: goal.projectMarkersOnNearPlaneOnly,
@@ -1187,6 +1363,7 @@ export default function App() {
         <Background intensity={backgroundIntensity} />
         {/* <ambientLight intensity={1} /> */}
         <CameraAndControlsSync position={cameraPosition} target={orbitTarget} />
+        <ViewportPoseGetterBridge getterRef={viewportPoseGetterRef} />
         <MainCameraEnableFrustumGuideLayer />
         <Car
           distance={near}
@@ -1213,6 +1390,7 @@ export default function App() {
           cyanHitMode={cyanHitMode}
           hitNoiseLevel={hitNoiseLevel}
           lidarPyramidHeight={lidarPyramidHeight}
+          lidarPyramidOpacity={lidarPyramidOpacity}
           lidarSampleRateHz={lidarSampleRateHz}
           lidarMaxRange={lidarMaxRange}
           carDriveActive={carWorldPosition !== null}
@@ -1301,8 +1479,29 @@ export default function App() {
               WebkitOverflowScrolling: 'touch',
             }}
           >
+            <div style={{ padding: '0 10px 4px', flexShrink: 0 }}>
+              <button
+                type="button"
+                title="뷰포트 카메라·오빗 타깃으로 동기화한 뒤 SceneSnapshot 리터럴을 클립보드에 복사"
+                onClick={copyCurrentScenePresetSnippet}
+                style={{
+                  width: '100%',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(120, 200, 255, 0.35)',
+                  background: 'rgba(80, 140, 220, 0.22)',
+                  color: '#dff4ff',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                현재값 복사
+              </button>
+            </div>
             {/*
-              패널 순서(의도 유지): 차량·바닥 → 카메라·배경 → 프러스텀·격자 → 가이드(뷰 평면 투명도 슬라이더는 주석 유지) → 교차점·시안 → 라이다.
+              패널 순서(의도 유지): 차량·바닥 → 카메라·배경 → 프러스텀·격자 → 가이드(뷰 평면 투명도 슬라이더는 주석 유지) → 교차점·시안 → 라이다 → 카메라·오빗 타겟(읽기).
               FrustumVisualizer: near 빨간 뷰 평면 mesh 주석은 필요 시 여기와 슬라이더를 함께 복구.
             */}
             <PanelGroup title="차량 · 바닥">
@@ -1523,6 +1722,15 @@ export default function App() {
                 onChange={setLidarPyramidHeight}
               />
               <SliderRow
+                label="라이다 위치 피라미드 투명도"
+                value={lidarPyramidOpacity}
+                min={0}
+                max={1}
+                step={0.02}
+                unit=""
+                onChange={setLidarPyramidOpacity}
+              />
+              <SliderRow
                 label="GPU 히트 위치 노이즈"
                 value={hitNoiseLevel}
                 min={0}
@@ -1549,6 +1757,154 @@ export default function App() {
                 unit=""
                 onChange={setLidarMaxRange}
               />
+            </PanelGroup>
+
+            <PanelGroup title="카메라 · 오빗 타겟 (읽기)">
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  marginBottom: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={refreshViewportPoseReadout}
+                  style={{
+                    fontSize: 12,
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    background: 'rgba(255,255,255,0.08)',
+                    color: '#e8f4ff',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  업데이트
+                </button>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: 6,
+                }}
+              >
+                <span style={{ fontSize: 11, color: '#9ab' }}>카메라 위치 (world)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(vec3TupleClipboardText(panelCameraReadout));
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: '3px 8px',
+                    borderRadius: 6,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: '#cfe8ff',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    flexShrink: 0,
+                  }}
+                >
+                  복사
+                </button>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '14px 1fr',
+                  gap: '4px 6px',
+                  marginBottom: 10,
+                  alignItems: 'center',
+                }}
+              >
+                {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+                  <React.Fragment key={`cam-${axis}`}>
+                    <span style={{ color: '#8ac', fontVariantNumeric: 'tabular-nums' }}>{axis}</span>
+                    <input
+                      readOnly
+                      value={panelCameraReadout[i].toFixed(4)}
+                      aria-label={`카메라 ${axis}`}
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        fontSize: 12,
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        background: 'rgba(0,0,0,0.35)',
+                        color: '#e8f0ff',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    />
+                  </React.Fragment>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: 6,
+                }}
+              >
+                <span style={{ fontSize: 11, color: '#9ab' }}>컨트롤 타겟 (orbit)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(vec3TupleClipboardText(panelTargetReadout));
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: '3px 8px',
+                    borderRadius: 6,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: '#cfe8ff',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    flexShrink: 0,
+                  }}
+                >
+                  복사
+                </button>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '14px 1fr',
+                  gap: '4px 6px',
+                  alignItems: 'center',
+                }}
+              >
+                {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+                  <React.Fragment key={`tgt-${axis}`}>
+                    <span style={{ color: '#8ac', fontVariantNumeric: 'tabular-nums' }}>{axis}</span>
+                    <input
+                      readOnly
+                      value={panelTargetReadout[i].toFixed(4)}
+                      aria-label={`오빗 타겟 ${axis}`}
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        fontSize: 12,
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        background: 'rgba(0,0,0,0.35)',
+                        color: '#e8f0ff',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    />
+                  </React.Fragment>
+                ))}
+              </div>
             </PanelGroup>
 
           </div>

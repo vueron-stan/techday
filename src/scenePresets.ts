@@ -45,6 +45,8 @@ export interface SceneSnapshot {
   hitNoiseLevel: number;
   /** 라이다 원점 피라미드 전방 길이 */
   lidarPyramidHeight: number;
+  /** 라이다 원점 피라미드 메시 투명도 (0–1) */
+  lidarPyramidOpacity: number;
   /** GPU 깊이 패스·포인트 갱신 주파수 (Hz) — 차량 주행 중에도 동일 간격으로만 갱신 */
   lidarSampleRateHz: number;
   /** 라이다/프러스텀 최대 거리(far, 월드) — 광선 끝·외접 구 반경·GPU maxRange */
@@ -74,7 +76,7 @@ export const INITIAL_SCENE: SceneSnapshot = {
   polarDivisions: 32,
 
   sphereOpacity: 0.0,
-  lineOpacity: 0.1,
+  lineOpacity: 0,
   planeOpacity: 0,
 
   sphereHitSize: 0.05,
@@ -85,15 +87,16 @@ export const INITIAL_SCENE: SceneSnapshot = {
 
   hitNoiseLevel: 0.03,
   lidarPyramidHeight: 1,
+  lidarPyramidOpacity: 0,
   lidarSampleRateHz: 10,
   lidarMaxRange: 70,
 
   carOpacity: 0,
-  streetOpacity: 1,
+  streetOpacity: 0,
 
   backgroundIntensity: 1.15,
-  cameraPosition: [7, 5, 9],
-  orbitTarget: [0, 0, 0],
+  cameraPosition: [7.475317110307151, -0.7281688354023441, 8.925257285566499],
+    orbitTarget: [0.49166223312671203, 1.900876456763511, -1.459187110171474],
 };
 
 /**
@@ -104,11 +107,20 @@ export const PRESETS: SceneSnapshot[] = [
   // 1 — 하늘 + 원점 (INITIAL과 동일 의도; 카메라만 살짝 다를 수 있음)
   {
     ...INITIAL_SCENE,
-    cameraPosition: [7.2, 5.2, 9.2],
-    orbitTarget: [0, 0, 0],
-    backgroundIntensity: 1.2,
+    cameraPosition: [7.475317110307151, -0.7281688354023441, 8.925257285566499],
+    orbitTarget: [0.49166223312671203, 1.900876456763511, -1.459187110171474],
+
   },
-  // 2 — 희소 레이 + 차량 주행 + GPU 깊이 시뮬 (`carDrive`: 시작/끝 위치·시간)
+  // 2 — 하늘 + 원점 (INITIAL과 동일 의도; 카메라만 살짝 다를 수 있음)
+  {
+    ...INITIAL_SCENE,
+    cameraPosition: [7.475317110307151, -0.7281688354023441, 8.925257285566499],
+    orbitTarget: [0.49166223312671203, 1.900876456763511, -1.459187110171474],
+    streetOpacity:1,
+    lineOpacity:0,
+    lidarPyramidOpacity:0,
+  },
+  // 3 — 희소 레이 + 차량 주행 + GPU 깊이 시뮬 (`carDrive`: 시작/끝 위치·시간)
   {
     ...INITIAL_SCENE,
     // lineOpacity: 0.42,
@@ -130,7 +142,7 @@ export const PRESETS: SceneSnapshot[] = [
       durationMs: 8000,
     },
   },
-  // 3 — 촘촘한 격자·넓은 FOV
+  // 4 — 촘촘한 격자·넓은 FOV
   {
     ...INITIAL_SCENE,
     // lineOpacity: 0.42,
@@ -153,104 +165,167 @@ export const PRESETS: SceneSnapshot[] = [
       durationMs: 8000,
     },
   },
-  // 4 — 거리 구면 + 시안(구면), 차 없음
-  {
-    ...INITIAL_SCENE,
-    sphereOpacity: 0.36,
-    lineOpacity: 0.4,
-    planeOpacity: 0.08,
-    sphereHitOpacity: 0.9,
-    nearPointSize: 0,
-    near: 6,
-    azimuthSpanDeg: 72,
-    polarSpanDeg: 52,
-    azimuthDivisions: 18,
-    polarDivisions: 11,
-    cameraPosition: [5.2, 3.2, 7.2],
-    orbitTarget: [0, -0.3, 0],
-    backgroundIntensity: 0.95,
-    carOpacity: 0,
-    projectMarkersOnNearPlaneOnly: false,
-    cyanHitMode: 'sphereOnly',
-  },
   // 5 — 차량 등장, 구면 히트 유지(관통)
   {
-    ...INITIAL_SCENE,
-    sphereOpacity: 0.32,
-    lineOpacity: 0.38,
-    planeOpacity: 0.1,
-    sphereHitOpacity: 0.88,
-    nearPointSize: 0,
     near: 6,
-    azimuthSpanDeg: 72,
-    polarSpanDeg: 52,
-    azimuthDivisions: 18,
-    polarDivisions: 11,
-    cameraPosition: [6.5, 2.8, 6.8],
-    orbitTarget: [0, -0.9, -3.2],
-    backgroundIntensity: 0.9,
-    carOpacity: 1,
+    azimuthSpanDeg: 45,
+    polarSpanDeg: 45,
+    azimuthDivisions: 4,
+    polarDivisions: 4,
+  
+    sphereOpacity: 1,
+    lineOpacity: 1,
+    planeOpacity: 0,
+  
+    sphereHitSize: 0.5,
+    sphereHitOpacity: 0.9,
+    nearPointSize: 0,
     projectMarkersOnNearPlaneOnly: false,
     cyanHitMode: 'sphereOnly',
+  
+    hitNoiseLevel: 0.03,
+    lidarPyramidHeight: 2.5,
+    lidarPyramidOpacity: 0.44,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+  
+    carOpacity: 0,
+    streetOpacity: 0,
+  
+    backgroundIntensity: 0,
+    cameraPosition: [23.504981566786327, 20.624815957369886, 35.18566275850949],
+    orbitTarget: [9.15143119596536, 12.005749769497985, -13.912439184324123],
   },
-  // 6 — 메시 히트
+  // 6 — 거리 구면 + 시안(구면), 차 없음
   {
-    ...INITIAL_SCENE,
-    sphereOpacity: 0.22,
-    lineOpacity: 0.34,
-    planeOpacity: 0.12,
-    sphereHitOpacity: 0.92,
-    nearPointSize: 0,
-    near: 5.5,
-    azimuthSpanDeg: 72,
-    polarSpanDeg: 52,
+    near: 6,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
     azimuthDivisions: 18,
     polarDivisions: 11,
-    cameraPosition: [6.2, 2.4, 6.2],
-    orbitTarget: [0, -0.85, -3.1],
-    backgroundIntensity: 0.88,
-    carOpacity: 1,
+  
+    sphereOpacity: 1,
+    lineOpacity: 0.94,
+    planeOpacity: 0,
+  
+    sphereHitSize: 0.5,
+    sphereHitOpacity: 0.9,
+    nearPointSize: 0,
     projectMarkersOnNearPlaneOnly: false,
-    cyanHitMode: 'depthSim',
+    cyanHitMode: 'sphereOnly',
+  
+    hitNoiseLevel: 0.03,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+  
+    carOpacity: 0,
+    streetOpacity: 0,
+  
+    backgroundIntensity: 0.05,
+    cameraPosition: [35.3241618322496, 38.40126360945008, 64.23891503904804],
+    orbitTarget: [11.60515558744173, 12.321567765229588, -5.555514980666803],
+  },
+  // 7 — 메시 히트
+  {
+    near: 6,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
+    azimuthDivisions: 256,
+    polarDivisions: 64,
+  
+    sphereOpacity: 0.30000000000000004,
+    lineOpacity: 0.94,
+    planeOpacity: 0,
+  
+    sphereHitSize: 0.2,
+    sphereHitOpacity: 0.9,
+    nearPointSize: 0,
+    projectMarkersOnNearPlaneOnly: false,
+    cyanHitMode: 'sphereOnly',
+  
+    hitNoiseLevel: 0.03,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+  
+    carOpacity: 0,
+    streetOpacity: 0,
+  
+    backgroundIntensity: 0.05,
+    cameraPosition: [46.51370163784948, 49.298951967688836, 87.8722732335296],
+    orbitTarget: [11.60515558744173, 12.321567765229588, -5.555514980666803],
   },
   // 7 — near 평면 강조 + 3D 히트(노랑 레이캐스트)
   {
     ...INITIAL_SCENE,
-    sphereOpacity: 0.12,
-    lineOpacity: 0.28,
-    planeOpacity: 0.7,
-    sphereHitOpacity: 0.85,
+    near: 6,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
+    azimuthDivisions: 256,
+    polarDivisions: 64,
+  
+    sphereOpacity: 0.30000000000000004,
+    lineOpacity: 0,
+    planeOpacity: 0,
+  
+    sphereHitSize: 0.02,
+    sphereHitOpacity: 0.3,
     nearPointSize: 0,
-    near: 4.2,
-    azimuthSpanDeg: 68,
-    polarSpanDeg: 48,
-    azimuthDivisions: 16,
-    polarDivisions: 10,
-    cameraPosition: [-3.8, 2.6, 7.4],
-    orbitTarget: [0, -0.5, -2.6],
-    backgroundIntensity: 0.85,
-    carOpacity: 1,
     projectMarkersOnNearPlaneOnly: false,
     cyanHitMode: 'depthSim',
+  
+    hitNoiseLevel: 0,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+    cameraPosition: [-3.8, 2.6, 7.4],
+    orbitTarget: [0, -0.5, -2.6],
+    carDrive:{
+      start: [-3, -2.1, -10],
+      end: [-3, -2.1, -10],
+      durationMs: 1,
+    },
+    backgroundIntensity: 0.85,
+    carOpacity: 1,
+    streetOpacity:1,
   },
   // 8 — 평면 위 샘플만 (range / depth)
   {
     ...INITIAL_SCENE,
-    sphereOpacity: 0.08,
-    lineOpacity: 0.22,
-    planeOpacity: 0.78,
-    sphereHitOpacity: 0.32,
+    near: 6,
+    azimuthSpanDeg: 120,
+    polarSpanDeg: 45,
+    azimuthDivisions: 256,
+    polarDivisions: 64,
+  
+    sphereOpacity: 0.30000000000000004,
+    lineOpacity: 0,
+    planeOpacity: 0,
+  
+    sphereHitSize: 0.02,
+    sphereHitOpacity: 0.3,
     nearPointSize: 0,
-    near: 4,
-    azimuthSpanDeg: 68,
-    polarSpanDeg: 48,
-    azimuthDivisions: 16,
-    polarDivisions: 10,
-    cameraPosition: [-4.2, 3, 7.8],
-    orbitTarget: [0, -0.2, -3.6],
-    backgroundIntensity: 0.82,
-    carOpacity: 1,
-    projectMarkersOnNearPlaneOnly: true,
+    projectMarkersOnNearPlaneOnly: false,
     cyanHitMode: 'depthSim',
+  
+    hitNoiseLevel: 0.03,
+    lidarPyramidHeight: 1.5,
+    lidarPyramidOpacity: 0.3,
+    lidarSampleRateHz: 10,
+    lidarMaxRange: 70,
+    cameraPosition: [-3.8, 2.6, 12.4],
+    orbitTarget: [0, -0.5, -2.6],
+    carDrive:{
+      start: [-3, -2.1, -10],
+      end: [-3, -2.1, -10],
+      durationMs: 1,
+    },
+    backgroundIntensity: 0.85,
+    carOpacity: 1,
+    streetOpacity:1,
   },
 ];
