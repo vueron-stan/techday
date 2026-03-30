@@ -28,6 +28,11 @@ export const LAYER_FRUSTUM_GUIDE = 1;
  * opacity 0 인 차·바닥: 메인 카메라(0·1)에는 안 보이지만 LiDAR 깊이 카메라는 이 레이어로 메시를 그려 포인트 시뮬 유지
  */
 export const LAYER_DEPTH_SIM_INVISIBLE = 2;
+/**
+ * 빨간 near 평면용 센서 깊이 RT에만 솔리드 외접 구를 넣기 위한 레이어.
+ * 메인 뷰 카메라는 이 레이어를 켜지 않음 — 와이어 구만 보임.
+ */
+export const LAYER_DEPTH_MAP_EXTRA = 3;
 
 interface Partition {
   start: number;
